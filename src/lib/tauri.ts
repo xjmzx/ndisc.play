@@ -60,6 +60,23 @@ export function listAlbumTracks(albumId: number): Promise<Track[]> {
   return invoke("list_album_tracks", { albumId });
 }
 
+/** Resolve file paths back to library tracks (missing paths are omitted). */
+export function tracksByPaths(paths: string[]): Promise<Track[]> {
+  return invoke("tracks_by_paths", { paths });
+}
+
+export function readTextFile(path: string): Promise<string> {
+  return invoke("read_text_file", { path });
+}
+
+export function writeTextFile(path: string, contents: string): Promise<void> {
+  return invoke("write_text_file", { path, contents });
+}
+
+export function defaultPlaylistDir(): Promise<string> {
+  return invoke("default_playlist_dir");
+}
+
 export function onScanProgress(
   cb: (p: ScanProgress) => void,
 ): Promise<UnlistenFn> {
@@ -81,6 +98,8 @@ export interface AudioStatus {
   playing: boolean;
   /** True once (consumed on read) when the track reached its natural end. */
   finished: boolean;
+  /** True once (consumed on read) when a load failed — frontend skips it. */
+  error: boolean;
 }
 
 export function audioPlay(path: string): Promise<void> {

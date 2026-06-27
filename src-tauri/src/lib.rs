@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -690,6 +691,69 @@ fn list_album_tracks(app: AppHandle, album_id: i64) -> Result<Vec<TrackRow>, Str
     rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
 }
 
+fn map_track_row(r: &rusqlite::Row) -> rusqlite::Result<TrackRow> {
+    Ok(TrackRow {
+        id: r.get(0)?,
+        album_id: r.get(1)?,
+        path: r.get(2)?,
+        title: r.get(3)?,
+        track_no: r.get(4)?,
+        disc_no: r.get(5)?,
+        duration: r.get(6)?,
+        codec: r.get(7)?,
+        sample_rate: r.get(8)?,
+        bit_depth: r.get(9)?,
+        is_video: r.get::<_, i64>(10)? != 0,
+    })
+}
+
+/// Resolve a list of file paths back to library tracks (used to rebuild a
+/// persisted/imported playlist with fresh ids + album links after a rescan).
+/// Paths not in the library are simply absent from the result.
+#[tauri::command]
+fn tracks_by_paths(app: AppHandle, paths: Vec<String>) -> Result<Vec<TrackRow>, String> {
+    if paths.is_empty() {
+        return Ok(Vec::new());
+    }
+    let conn = open(&app)?;
+    let placeholders = vec!["?"; paths.len()].join(",");
+    let sql = format!(
+        "SELECT id, album_id, path, title, track_no, disc_no, duration, codec,
+                sample_rate, bit_depth, is_video
+         FROM tracks WHERE path IN ({placeholders})"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(rusqlite::params_from_iter(paths.iter()), map_track_row)
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn read_text_file(path: String) -> Result<String, String> {
+    fs::read_to_string(&path).map_err(|e| format!("{path}: {e}"))
+}
+
+#[tauri::command]
+fn write_text_file(path: String, contents: String) -> Result<(), String> {
+    if let Some(p) = Path::new(&path).parent() {
+        let _ = fs::create_dir_all(p);
+    }
+    fs::write(&path, contents).map_err(|e| format!("{path}: {e}"))
+}
+
+/// Default folder for playlist files — the user's Strawberry playlist dir.
+#[tauri::command]
+fn default_playlist_dir(app: AppHandle) -> Result<String, String> {
+    let dir = app
+        .path()
+        .home_dir()
+        .map_err(|e| e.to_string())?
+        .join("Music")
+        .join("Strawberry");
+    Ok(dir.to_string_lossy().into_owned())
+}
+
 // ---- native audio playback (rodio) ---------------------------------------
 //
 // WebKit2GTK's media element here refuses to play from any app URI scheme
@@ -719,6 +783,9 @@ struct AudioShared {
     /// Set when the current track reached its natural end; consumed (reset)
     /// on read so the frontend advances the queue exactly once.
     finished: AtomicBool,
+    /// Set when a Play command failed to load (undecodable / no audio).
+    /// Consumed on read so the frontend skips that track once.
+    error: AtomicBool,
 }
 
 struct AudioState {
@@ -726,7 +793,39 @@ struct AudioState {
     shared: Arc<AudioShared>,
 }
 
-fn spawn_audio_thread(rx: std::sync::mpsc::Receiver<AudioCmd>, shared: Arc<AudioShared>) {
+/// Extract a video file's audio track to a cached WAV via ffmpeg, so the
+/// rodio engine can play it (audio-only). Cached by path hash — first play
+/// transcodes (~1-3s), later plays reuse the WAV. Returns the WAV path.
+fn transcode_video_audio(src: &str, cache_dir: &Path) -> Result<PathBuf, String> {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    src.hash(&mut h);
+    let out = cache_dir.join(format!("{:016x}.wav", h.finish()));
+    if out.exists() && fs::metadata(&out).map(|m| m.len() > 0).unwrap_or(false) {
+        return Ok(out);
+    }
+    let status = Command::new("ffmpeg")
+        .args(["-y", "-v", "error", "-i", src, "-vn", "-c:a", "pcm_s16le"])
+        .arg(&out)
+        .status()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                "ffmpeg not found on PATH".to_string()
+            } else {
+                format!("ffmpeg launch failed: {e}")
+            }
+        })?;
+    if !status.success() {
+        let _ = fs::remove_file(&out);
+        return Err("ffmpeg failed to extract audio".to_string());
+    }
+    Ok(out)
+}
+
+fn spawn_audio_thread(
+    rx: std::sync::mpsc::Receiver<AudioCmd>,
+    shared: Arc<AudioShared>,
+    cache_dir: PathBuf,
+) {
     use rodio::{Decoder, OutputStream, Sink, Source};
     use std::io::BufReader;
     use std::sync::mpsc::RecvTimeoutError;
@@ -756,31 +855,53 @@ fn spawn_audio_thread(rx: std::sync::mpsc::Receiver<AudioCmd>, shared: Arc<Audio
         loop {
             match rx.recv_timeout(Duration::from_millis(150)) {
                 Ok(AudioCmd::Play(path)) => {
-                    sink.stop();
-                    sink = match Sink::try_new(&handle) {
-                        Ok(s) => s,
-                        Err(_) => continue,
+                    // Video files: extract their audio to a cached WAV first
+                    // (rodio is audio-only and can't pick the audio track out
+                    // of a video container). Audio files decode directly.
+                    let src = if is_video(Path::new(&path)) {
+                        match transcode_video_audio(&path, &cache_dir) {
+                            Ok(p) => Some(p.to_string_lossy().into_owned()),
+                            Err(e) => {
+                                eprintln!("audio: video extract {path}: {e}");
+                                None
+                            }
+                        }
+                    } else {
+                        Some(path.clone())
                     };
-                    sink.set_volume(volume);
-                    let loaded = std::fs::File::open(&path)
-                        .map_err(|e| e.to_string())
-                        .and_then(|f| {
-                            Decoder::new(BufReader::new(f)).map_err(|e| e.to_string())
-                        });
+                    // Decode first; only stop the current track + swap the sink
+                    // if the new file actually loads, so an undecodable file
+                    // never kills what's playing. On failure, flag an error so
+                    // the frontend skips to the next track.
+                    let loaded = src.ok_or_else(|| "no audio".to_string()).and_then(|p| {
+                        std::fs::File::open(&p)
+                            .map_err(|e| e.to_string())
+                            .and_then(|f| {
+                                Decoder::new(BufReader::new(f)).map_err(|e| e.to_string())
+                            })
+                    });
                     match loaded {
                         Ok(dec) => {
                             let dur =
                                 dec.total_duration().map(|d| d.as_millis() as u64).unwrap_or(0);
+                            sink.stop();
+                            sink = match Sink::try_new(&handle) {
+                                Ok(s) => s,
+                                Err(_) => continue,
+                            };
+                            sink.set_volume(volume);
                             shared.duration_ms.store(dur, Ordering::Relaxed);
                             shared.position_ms.store(0, Ordering::Relaxed);
                             shared.finished.store(false, Ordering::Relaxed);
+                            shared.error.store(false, Ordering::Relaxed);
                             sink.append(dec);
                             sink.play();
                             active = true;
                         }
                         Err(e) => {
+                            // Keep current playback running; flag for skip.
                             eprintln!("audio: load {path}: {e}");
-                            active = false;
+                            shared.error.store(true, Ordering::Relaxed);
                         }
                     }
                 }
@@ -871,6 +992,7 @@ struct AudioStatus {
     duration_ms: u64,
     playing: bool,
     finished: bool,
+    error: bool,
 }
 
 #[tauri::command]
@@ -881,6 +1003,7 @@ fn audio_status(state: State<AudioState>) -> AudioStatus {
         duration_ms: s.duration_ms.load(Ordering::Relaxed),
         playing: s.playing.load(Ordering::Relaxed),
         finished: s.finished.swap(false, Ordering::Relaxed),
+        error: s.error.swap(false, Ordering::Relaxed),
     }
 }
 
@@ -890,9 +1013,16 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            // Cache dir for ffmpeg-extracted video audio (disposable).
+            let cache = app
+                .path()
+                .app_cache_dir()
+                .map(|d| d.join("videoaudio"))
+                .unwrap_or_else(|_| std::env::temp_dir().join("nplay-videoaudio"));
+            let _ = fs::create_dir_all(&cache);
             let (tx, rx) = std::sync::mpsc::channel::<AudioCmd>();
             let shared = Arc::new(AudioShared::default());
-            spawn_audio_thread(rx, shared.clone());
+            spawn_audio_thread(rx, shared.clone(), cache);
             app.manage(AudioState {
                 tx: Mutex::new(tx),
                 shared,
@@ -905,6 +1035,10 @@ pub fn run() {
             scan_library,
             list_albums,
             list_album_tracks,
+            tracks_by_paths,
+            read_text_file,
+            write_text_file,
+            default_playlist_dir,
             audio_play,
             audio_pause,
             audio_resume,

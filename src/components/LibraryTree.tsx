@@ -2,14 +2,16 @@ import { useMemo, useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
-  Disc3,
   Film,
   Music2,
   Play,
+  Plus,
 } from "lucide-react";
 import { cn } from "../lib/cn";
 import { formatTime } from "../lib/format";
 import { listAlbumTracks, type Album, type Track } from "../lib/tauri";
+
+export type SortKey = "artist" | "album" | "year";
 
 interface LibraryTreeProps {
   albums: Album[];
@@ -17,6 +19,12 @@ interface LibraryTreeProps {
   currentTrackId: number | null;
   /** Play `tracks` starting at `startIndex` (replaces the queue). */
   onPlay: (tracks: Track[], startIndex: number) => void;
+  /** Append tracks to the playlist. */
+  onAddToPlaylist: (tracks: Track[]) => void;
+  /** Album ordering within each artist. */
+  sort: SortKey;
+  /** Substring filter over artist + album names (case-insensitive). */
+  filter: string;
 }
 
 interface ArtistGroup {
@@ -28,9 +36,12 @@ export function LibraryTree({
   albums,
   currentTrackId,
   onPlay,
+  onAddToPlaylist,
+  sort,
+  filter,
 }: LibraryTreeProps) {
-  // Backend already sorts albums by (artist, year, album); preserve that
-  // order while grouping into artists.
+  // Group by artist (backend already sorts by artist, year, album), then
+  // re-order each group's albums by the chosen sort and apply the filter.
   const groups = useMemo<ArtistGroup[]>(() => {
     const out: ArtistGroup[] = [];
     let last: ArtistGroup | null = null;
@@ -41,8 +52,34 @@ export function LibraryTree({
       }
       last.albums.push(a);
     }
-    return out;
-  }, [albums]);
+
+    const byAlbum = (x: Album, y: Album) =>
+      x.album.toLowerCase().localeCompare(y.album.toLowerCase());
+    for (const g of out) {
+      if (sort === "album") {
+        g.albums = [...g.albums].sort(byAlbum);
+      } else if (sort === "year") {
+        g.albums = [...g.albums].sort(
+          (x, y) => (x.year ?? Infinity) - (y.year ?? Infinity) || byAlbum(x, y),
+        );
+      }
+      // "artist" keeps the backend (year, album) order.
+    }
+
+    const f = filter.trim().toLowerCase();
+    if (!f) return out;
+    return out
+      .map((g) => {
+        if (g.artist.toLowerCase().includes(f)) return g;
+        const albums = g.albums.filter((al) =>
+          al.album.toLowerCase().includes(f),
+        );
+        return albums.length ? { artist: g.artist, albums } : null;
+      })
+      .filter((g): g is ArtistGroup => g !== null);
+  }, [albums, sort, filter]);
+
+  const filtering = filter.trim().length > 0;
 
   const [openArtists, setOpenArtists] = useState<Set<string>>(new Set());
   const [openAlbums, setOpenAlbums] = useState<Set<number>>(new Set());
@@ -88,6 +125,11 @@ export function LibraryTree({
     if (rows.length) onPlay(rows, startIndex);
   }
 
+  async function addAlbum(albumId: number) {
+    const rows = await ensureTracks(albumId);
+    if (rows.length) onAddToPlaylist(rows);
+  }
+
   if (!albums.length) {
     return (
       <div className="text-sm text-muted px-2 py-4">
@@ -96,11 +138,17 @@ export function LibraryTree({
     );
   }
 
+  if (!groups.length) {
+    return (
+      <div className="text-sm text-muted px-2 py-4">No matches.</div>
+    );
+  }
+
   return (
     <div className="text-sm">
       {groups.map((g) => {
-        const artistOpen = openArtists.has(g.artist);
-        const albumCount = g.albums.length;
+        // While filtering, show matching groups expanded so hits are visible.
+        const artistOpen = filtering || openArtists.has(g.artist);
         return (
           <div key={g.artist}>
             <button
@@ -112,11 +160,11 @@ export function LibraryTree({
               ) : (
                 <ChevronRight size={14} className="text-muted shrink-0" />
               )}
-              <span className="truncate font-medium text-fg/90">
+              <span className="truncate min-w-0 rounded-full px-2 py-0.5 bg-mauve/15 text-mauve font-medium">
                 {g.artist}
               </span>
               <span className="ml-auto text-[11px] text-muted tabular-nums shrink-0">
-                {albumCount}
+                {g.albums.length}
               </span>
             </button>
 
@@ -144,11 +192,7 @@ export function LibraryTree({
                               className="text-muted shrink-0"
                             />
                           )}
-                          <Disc3
-                            size={13}
-                            className="text-digital/70 shrink-0"
-                          />
-                          <span className="truncate text-fg/80">
+                          <span className="truncate min-w-0 rounded-full px-2 py-0.5 bg-digital/15 text-digital">
                             {al.album}
                           </span>
                           {al.year != null && (
@@ -157,10 +201,7 @@ export function LibraryTree({
                             </span>
                           )}
                           {al.hasVideo && (
-                            <Film
-                              size={12}
-                              className="text-mauve/70 shrink-0"
-                            />
+                            <Film size={12} className="text-mauve/70 shrink-0" />
                           )}
                         </button>
                         <button
@@ -169,6 +210,13 @@ export function LibraryTree({
                           className="opacity-0 group-hover:opacity-100 text-muted hover:text-accent shrink-0 transition-opacity"
                         >
                           <Play size={13} />
+                        </button>
+                        <button
+                          onClick={() => addAlbum(al.id)}
+                          title="Add album to playlist"
+                          className="opacity-0 group-hover:opacity-100 text-muted hover:text-accent shrink-0 transition-opacity"
+                        >
+                          <Plus size={13} />
                         </button>
                         <span className="text-[11px] text-muted tabular-nums shrink-0 w-5 text-right">
                           {al.trackCount}
@@ -185,33 +233,37 @@ export function LibraryTree({
                           {tracks.map((t, i) => {
                             const active = t.id === currentTrackId;
                             return (
-                              <button
+                              <div
                                 key={t.id}
-                                onDoubleClick={() => onPlay(tracks, i)}
-                                onClick={() => onPlay(tracks, i)}
                                 className={cn(
-                                  "w-full flex items-center gap-2 px-2 py-1 rounded text-left hover:bg-surface/50",
+                                  "group flex items-center gap-2 px-2 py-1 rounded hover:bg-surface/50",
                                   active && "bg-surface/70",
                                 )}
                               >
-                                {active ? (
-                                  <Music2
-                                    size={12}
-                                    className="text-accent shrink-0"
-                                  />
-                                ) : (
-                                  <span className="w-4 text-right text-[11px] text-muted tabular-nums shrink-0">
-                                    {t.trackNo ?? "·"}
-                                  </span>
-                                )}
-                                <span
-                                  className={cn(
-                                    "truncate flex-1",
-                                    active ? "text-accent" : "text-fg/75",
-                                  )}
+                                <button
+                                  onDoubleClick={() => onPlay(tracks, i)}
+                                  title="Double-click to play"
+                                  className="flex items-center gap-2 min-w-0 flex-1 text-left select-none"
                                 >
-                                  {t.title}
-                                </span>
+                                  {active ? (
+                                    <Music2
+                                      size={12}
+                                      className="text-accent shrink-0"
+                                    />
+                                  ) : (
+                                    <span className="w-4 text-right text-[11px] text-muted tabular-nums shrink-0">
+                                      {t.trackNo ?? "·"}
+                                    </span>
+                                  )}
+                                  <span
+                                    className={cn(
+                                      "truncate flex-1",
+                                      active ? "text-accent" : "text-fg/75",
+                                    )}
+                                  >
+                                    {t.title}
+                                  </span>
+                                </button>
                                 {t.isVideo && (
                                   <Film
                                     size={11}
@@ -223,7 +275,14 @@ export function LibraryTree({
                                     {formatTime(t.duration)}
                                   </span>
                                 )}
-                              </button>
+                                <button
+                                  onClick={() => onAddToPlaylist([t])}
+                                  title="Add to playlist"
+                                  className="opacity-0 group-hover:opacity-100 text-muted hover:text-accent shrink-0 transition-opacity"
+                                >
+                                  <Plus size={13} />
+                                </button>
+                              </div>
                             );
                           })}
                         </div>

@@ -29,6 +29,8 @@ walkdir = "2"
 rayon = "1"
 # Tag + embedded-cover reader. Matches ndisc.
 lofty = "0.22"
-# Native audio output + decoding (FLAC/MP3/etc). WebKit2GTK's media element
-# can't play from app URI schemes on this stack, so playback lives in Rust.
-rodio = "0.19"
+# Native audio output + decoding. WebKit2GTK's media element can't play from
+# app URI schemes on this stack, so playback lives in Rust. The symphonia
+# backend (default decoders off) gives uniform seeking across FLAC/MP3 plus
+# AIFF and the audio track of video files.
+rodio = { version = "0.19", default-features = false, features = ["symphonia-all"] }

@@ -1,4 +1,4 @@
-import { Pause, Play, SkipBack, SkipForward, Volume2 } from "lucide-react";
+import { Volume2 } from "lucide-react";
 import { cn } from "../lib/cn";
 import { formatTime } from "../lib/format";
 import type { Album, Track } from "../lib/tauri";
@@ -6,31 +6,21 @@ import type { Album, Track } from "../lib/tauri";
 interface PlayerBarProps {
   track: Track | null;
   album: Album | null;
-  isPlaying: boolean;
   currentTime: number;
   duration: number;
   volume: number;
-  canPrev: boolean;
-  canNext: boolean;
-  onToggle: () => void;
-  onPrev: () => void;
-  onNext: () => void;
   onSeek: (t: number) => void;
   onVolume: (v: number) => void;
 }
 
+// Transport (prev/play/next) lives in the header now; the footer is just the
+// centered now-playing title, seek bar, time readouts and volume.
 export function PlayerBar({
   track,
   album,
-  isPlaying,
   currentTime,
   duration,
   volume,
-  canPrev,
-  canNext,
-  onToggle,
-  onPrev,
-  onNext,
   onSeek,
   onVolume,
 }: PlayerBarProps) {
@@ -44,52 +34,18 @@ export function PlayerBar({
   const pct = duration > 0 ? (currentTime / duration) * 100 : 0;
 
   return (
-    <div className="flex items-center gap-4 px-4 py-2.5 bg-panel border-t border-surface/60">
-      {/* Transport buttons */}
-      <div className="flex items-center gap-1.5 shrink-0">
-        <button
-          onClick={onPrev}
-          disabled={!canPrev}
-          title="Previous"
-          className="text-fg/80 hover:text-accent disabled:text-muted/40 disabled:hover:text-muted/40 transition-colors"
-        >
-          <SkipBack size={18} />
-        </button>
-        <button
-          onClick={onToggle}
-          disabled={!track}
-          title={isPlaying ? "Pause" : "Play"}
-          className="w-9 h-9 rounded-full bg-surface/70 hover:bg-surfaceHover flex items-center justify-center text-fg disabled:text-muted/40 transition-colors"
-        >
-          {isPlaying ? (
-            <Pause size={18} />
-          ) : (
-            <Play size={18} className="translate-x-[1px]" />
-          )}
-        </button>
-        <button
-          onClick={onNext}
-          disabled={!canNext}
-          title="Next"
-          className="text-fg/80 hover:text-accent disabled:text-muted/40 disabled:hover:text-muted/40 transition-colors"
-        >
-          <SkipForward size={18} />
-        </button>
-      </div>
-
-      {/* Title + seek */}
-      <div className="flex-1 min-w-0 flex flex-col gap-1">
-        <div className="flex items-center gap-2 text-[13px] min-w-0">
-          <span className="truncate text-fg/90">
-            {track?.title ?? "—"}
-          </span>
+    <div className="flex justify-center px-4 py-2.5 bg-panel border-t border-surface/60">
+      <div className="w-1/2 min-w-[300px] max-w-full flex flex-col items-center gap-1">
+        {/* Title */}
+        <div className="flex items-center justify-center gap-2 text-[13px] min-w-0 max-w-full">
+          <span className="truncate text-fg/90">{track?.title ?? "—"}</span>
           {album && (
-            <span className="truncate text-muted shrink-[2]">
-              {album.artist}
-            </span>
+            <span className="truncate text-muted shrink-[2]">{album.artist}</span>
           )}
         </div>
-        <div className="flex items-center gap-2">
+
+        {/* Elapsed · seek · total · volume */}
+        <div className="w-full flex items-center gap-2">
           <span className="text-[11px] text-muted font-mono tabular-nums w-9 text-right shrink-0">
             {formatTime(currentTime)}
           </span>
@@ -101,30 +57,29 @@ export function PlayerBar({
             )}
             title="Click to seek"
           >
-            <div
-              className="h-full bg-accent"
-              style={{ width: `${pct}%` }}
-            />
+            <div className="h-full bg-accent" style={{ width: `${pct}%` }} />
           </div>
           <span className="text-[11px] text-muted font-mono tabular-nums w-9 shrink-0">
             {formatTime(duration)}
           </span>
+          <Volume2 size={15} className="text-muted shrink-0 ml-1" />
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.01}
+            value={volume}
+            onChange={(e) => onVolume(parseFloat(e.target.value))}
+            title="Volume"
+            className={cn(
+              "w-24 cursor-pointer shrink-0 appearance-none bg-transparent",
+              // visible track
+              "[&::-webkit-slider-runnable-track]:h-1.5 [&::-webkit-slider-runnable-track]:rounded-full [&::-webkit-slider-runnable-track]:bg-surfaceHover",
+              // accent thumb, centered on the thin track
+              "[&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-accent [&::-webkit-slider-thumb]:-mt-[3px]",
+            )}
+          />
         </div>
-      </div>
-
-      {/* Volume */}
-      <div className="flex items-center gap-2 shrink-0 w-32">
-        <Volume2 size={16} className="text-muted shrink-0" />
-        <input
-          type="range"
-          min={0}
-          max={1}
-          step={0.01}
-          value={volume}
-          onChange={(e) => onVolume(parseFloat(e.target.value))}
-          className="flex-1 accent-accent h-1 cursor-pointer"
-          title="Volume"
-        />
       </div>
     </div>
   );

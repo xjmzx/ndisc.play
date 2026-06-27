@@ -1,4 +1,5 @@
 import { ReactNode } from "react";
+import { ChevronDown } from "lucide-react";
 import { cn } from "../lib/cn";
 
 interface SectionProps {
@@ -54,6 +55,9 @@ export function Section({
       >
         {icon}
         <h2 className="text-sm tracking-wide uppercase">{title}</h2>
+        {onTitleClick && (
+          <ChevronDown size={14} className="ml-auto text-muted shrink-0" />
+        )}
       </header>
       <div
         className={cn(

@@ -13,9 +13,9 @@
     "windows": [
       {
         "title": "ndisc.play",
-        "width": 1240,
+        "width": 1380,
         "height": 820,
-        "minWidth": 820,
+        "minWidth": 940,
         "minHeight": 560
       }
     ],
