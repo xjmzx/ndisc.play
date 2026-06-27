@@ -1,7 +1,7 @@
 PREFIX  ?= $(HOME)/.local
 BINDIR  ?= $(PREFIX)/bin
 APPDIR  ?= $(PREFIX)/share/applications
-ICONDIR ?= $(PREFIX)/share/icons/hicolor/scalable/apps
+ICONDIR ?= $(PREFIX)/share/icons/hicolor/128x128/apps
 
 DESKTOP_OUT := $(APPDIR)/nplay.desktop
 TAURI_BIN   := src-tauri/target/release/nplay
@@ -38,7 +38,7 @@ check:
 install: $(TAURI_BIN)
 	install -d $(BINDIR) $(APPDIR) $(ICONDIR)
 	install -m 0755 $(TAURI_BIN) $(BINDIR)/nplay
-	install -m 0644 icon.svg     $(ICONDIR)/nplay.svg
+	install -m 0644 src-tauri/icons/128x128.png $(ICONDIR)/nplay.png
 	sed -e 's|@BINDIR@|$(BINDIR)|g' \
 	    -e 's|@ICONDIR@|$(ICONDIR)|g' \
 	    nplay.desktop.in > $(DESKTOP_OUT)
@@ -46,13 +46,16 @@ install: $(TAURI_BIN)
 	@if command -v update-desktop-database >/dev/null 2>&1; then \
 		update-desktop-database $(APPDIR) >/dev/null 2>&1 || true; \
 	fi
+	@if command -v gtk-update-icon-cache >/dev/null 2>&1; then \
+		gtk-update-icon-cache -f -t $(PREFIX)/share/icons/hicolor >/dev/null 2>&1 || true; \
+	fi
 	@echo "installed to $(PREFIX)"
 	@echo "  binary  -> $(BINDIR)/nplay"
 	@echo "  desktop -> $(DESKTOP_OUT)"
 
 uninstall:
 	rm -f $(BINDIR)/nplay
-	rm -f $(ICONDIR)/nplay.svg
+	rm -f $(ICONDIR)/nplay.png
 	rm -f $(DESKTOP_OUT)
 	@if command -v update-desktop-database >/dev/null 2>&1; then \
 		update-desktop-database $(APPDIR) >/dev/null 2>&1 || true; \
