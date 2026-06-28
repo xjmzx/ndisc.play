@@ -34,3 +34,8 @@ lofty = "0.22"
 # backend (default decoders off) gives uniform seeking across FLAC/MP3 plus
 # AIFF and the audio track of video files.
 rodio = { version = "0.19", default-features = false, features = ["symphonia-all"] }
+# Loopback HTTP server (127.0.0.1) so the webview <video> element can stream
+# local media with Range support — WebKit2GTK refuses local media over app URI
+# schemes (asset:// → MediaError 4) but plays it fine over http://localhost.
+tiny_http = "0.12"
+percent-encoding = "2"

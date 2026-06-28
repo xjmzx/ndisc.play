@@ -7,6 +7,23 @@ app's own semver, below.
 
 ## 0.1.0-beta.1 — unreleased
 
+### VIDEO section — picture playback — 2026-06-28
+- **4th section: Video** (right-most, collapsible). mp4 now plays with picture
+  in a webview `<video>` element.
+- **Loopback media server.** WebKit2GTK can't play local media over the asset
+  protocol (confirmed `MediaError 4`), so a small Rust `tiny_http` server on
+  `127.0.0.1` streams library files with full HTTP **Range** support; `<video>`
+  points at it. mp4 tracks bypass rodio; non-mp4 video stays audio-only.
+- **Unified transport.** The header/footer transport (play/pause, seek, prev,
+  volume, auto-advance) drives the `<video>` element for mp4, rodio otherwise;
+  the Video panel auto-expands when a video starts.
+- **Collection video filter.** A `Video` toggle in the Collection controls
+  restricts the tree to video-bearing albums (only their video tracks shown);
+  playable mp4 tracks are tinted in the vibrant `digital` hue.
+- **Requires `gstreamer1.0-libav`** (provides `avdec_h264`/`avdec_aac`) for
+  H.264 playback — a packaging dependency for the eventual `.deb`. Non-mp4
+  containers and non-faststart mp4s need conversion (planned ntree batch op).
+
 ### Scan feedback + playlist polish — 2026-06-28
 - **Persistent header scan meter.** Replaced the terse "%/scanning…" header
   text with a permanent compact progress meter in the header's right cluster:
@@ -40,10 +57,9 @@ app's own semver, below.
 
 ## Roadmap
 
-- **VIDEO — a 4th section (planned).** Target layout becomes
-  **Collection · Playlist · Now playing · Video**, with Video as the last
-  (right-most) section: a real `<video>` surface for the AV files (whose audio
-  already plays). Further features may land in this section over time.
+- **Library video normalization** — a batch "Normalize videos" op in **ntree**
+  to remux/transcode legacy library videos (mpg/avi/mov, non-faststart mp4) to
+  playable H.264/AAC faststart mp4, so nplay plays the whole set with picture.
 - BPM display (aubio, ported from the smpl detector).
 - Responsive auto-collapse of panels at narrow widths.
 - Playlist reorder (drag / up-down).

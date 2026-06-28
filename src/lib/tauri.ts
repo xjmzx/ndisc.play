@@ -90,6 +90,17 @@ export function fileSrc(path: string): string {
   return convertFileSrc(path);
 }
 
+/** Base URL of the Rust loopback media server (`http://127.0.0.1:<port>`). */
+export function mediaBase(): Promise<string> {
+  return invoke("media_base");
+}
+
+/** Loopback-server URL for a local media file — used by the <video> element,
+ *  since WebKit2GTK can't play local media over the asset protocol. */
+export function videoSrc(base: string, path: string): string {
+  return `${base}/media?path=${encodeURIComponent(path)}`;
+}
+
 // --- native audio playback (Rust rodio backend) ---------------------------
 // WebKit2GTK can't play local media here, so playback is driven over IPC and
 // the frontend polls audioStatus() for position / finished.

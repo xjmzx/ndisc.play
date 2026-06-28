@@ -13,6 +13,9 @@ import { listAlbumTracks, type Album, type Track } from "../lib/tauri";
 
 export type SortKey = "artist" | "album" | "year";
 
+/** mp4 is the format that actually plays with picture (others are audio-only). */
+const isMp4 = (p: string) => /\.mp4$/i.test(p);
+
 interface LibraryTreeProps {
   albums: Album[];
   /** Id of the track currently loaded in the transport (for highlight). */
@@ -25,6 +28,8 @@ interface LibraryTreeProps {
   sort: SortKey;
   /** Substring filter over artist + album names (case-insensitive). */
   filter: string;
+  /** Restrict to albums that contain video, and show only their video tracks. */
+  videoOnly: boolean;
 }
 
 interface ArtistGroup {
@@ -39,13 +44,15 @@ export function LibraryTree({
   onAddToPlaylist,
   sort,
   filter,
+  videoOnly,
 }: LibraryTreeProps) {
   // Group by artist (backend already sorts by artist, year, album), then
   // re-order each group's albums by the chosen sort and apply the filter.
   const groups = useMemo<ArtistGroup[]>(() => {
+    const source = videoOnly ? albums.filter((a) => a.hasVideo) : albums;
     const out: ArtistGroup[] = [];
     let last: ArtistGroup | null = null;
-    for (const a of albums) {
+    for (const a of source) {
       if (!last || last.artist !== a.artist) {
         last = { artist: a.artist, albums: [] };
         out.push(last);
@@ -77,9 +84,11 @@ export function LibraryTree({
         return albums.length ? { artist: g.artist, albums } : null;
       })
       .filter((g): g is ArtistGroup => g !== null);
-  }, [albums, sort, filter]);
+  }, [albums, sort, filter, videoOnly]);
 
-  const filtering = filter.trim().length > 0;
+  // Auto-expand artists when narrowing (text filter or video-only) so the
+  // (usually few) matches are visible without manual drilling.
+  const filtering = filter.trim().length > 0 || videoOnly;
 
   const [openArtists, setOpenArtists] = useState<Set<string>>(new Set());
   const [openAlbums, setOpenAlbums] = useState<Set<number>>(new Set());
@@ -230,8 +239,12 @@ export function LibraryTree({
                               loading…
                             </div>
                           )}
-                          {tracks.map((t, i) => {
+                          {(videoOnly
+                            ? tracks.filter((t) => t.isVideo)
+                            : tracks
+                          ).map((t, i, shown) => {
                             const active = t.id === currentTrackId;
+                            const playableVideo = t.isVideo && isMp4(t.path);
                             return (
                               <div
                                 key={t.id}
@@ -241,7 +254,7 @@ export function LibraryTree({
                                 )}
                               >
                                 <button
-                                  onDoubleClick={() => onPlay(tracks, i)}
+                                  onDoubleClick={() => onPlay(shown, i)}
                                   title="Double-click to play"
                                   className="flex items-center gap-2 min-w-0 flex-1 text-left select-none"
                                 >
@@ -258,7 +271,11 @@ export function LibraryTree({
                                   <span
                                     className={cn(
                                       "truncate flex-1",
-                                      active ? "text-accent" : "text-fg/75",
+                                      active
+                                        ? "text-accent"
+                                        : playableVideo
+                                          ? "text-digital"
+                                          : "text-fg/75",
                                     )}
                                   >
                                     {t.title}
@@ -267,7 +284,12 @@ export function LibraryTree({
                                 {t.isVideo && (
                                   <Film
                                     size={11}
-                                    className="text-mauve/70 shrink-0"
+                                    className={cn(
+                                      "shrink-0",
+                                      playableVideo
+                                        ? "text-digital"
+                                        : "text-mauve/60",
+                                    )}
                                   />
                                 )}
                                 {t.duration != null && (

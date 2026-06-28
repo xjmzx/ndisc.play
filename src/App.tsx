@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import {
+  Film,
   FolderOpen,
   ListMusic,
   ListPlus,
@@ -22,6 +23,7 @@ import { PlayerBar } from "./components/PlayerBar";
 import { Playlist } from "./components/Playlist";
 import { Queue } from "./components/Queue";
 import { ScanProgressBar } from "./components/ScanProgressBar";
+import { Video } from "./components/Video";
 import {
   audioPause,
   audioPlay,
@@ -33,6 +35,7 @@ import {
   defaultPlaylistDir,
   getConfig,
   listAlbums,
+  mediaBase,
   onScanProgress,
   readTextFile,
   scanLibrary,
@@ -98,6 +101,7 @@ function usePersistedBool(key: string, def = false) {
 
 export default function App() {
   const [musicRoot, setRoot] = useState("");
+  const [mediaBaseUrl, setMediaBaseUrl] = useState("");
   const [albums, setAlbums] = useState<Album[]>([]);
   const [loadingAlbums, setLoadingAlbums] = useState(true);
   const [scanning, setScanning] = useState(false);
@@ -109,9 +113,11 @@ export default function App() {
   const [playlistDir, setPlaylistDir] = useState<string | null>(null);
   const [sort, setSort] = useState<SortKey>("artist");
   const [filter, setFilter] = useState("");
+  const [videoOnly, setVideoOnly] = useState(false);
   const [colCollapsed, setColCollapsed] = usePersistedBool("nplay.col.collapsed");
   const [plCollapsed, setPlCollapsed] = usePersistedBool("nplay.playlist.collapsed");
   const [npCollapsed, setNpCollapsed] = usePersistedBool("nplay.nowplaying.collapsed");
+  const [vidCollapsed, setVidCollapsed] = usePersistedBool("nplay.video.collapsed");
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -122,6 +128,9 @@ export default function App() {
   });
 
   const current = index >= 0 && index < queue.length ? queue[index] : null;
+  // mp4 videos are driven by the webview <video> element (rodio can't draw a
+  // picture); everything else (audio + non-mp4 video audio) goes to rodio.
+  const currentIsMp4 = !!current?.isVideo && /\.mp4$/i.test(current.path);
 
   const albumById = useMemo(() => {
     const m = new Map<number, Album>();
@@ -142,6 +151,7 @@ export default function App() {
 
   useEffect(() => {
     getConfig().then((c) => setRoot(c.musicRoot));
+    mediaBase().then(setMediaBaseUrl).catch(() => {});
     refreshAlbums();
     const un = onScanProgress(setProgress);
     return () => {
@@ -181,6 +191,10 @@ export default function App() {
   // that genuinely can't be decoded flags `error` in the status poll and is
   // skipped to the next track. Latest next handler held in a ref so the poll
   // never closes over stale queue/index state.
+  // The webview <video> element (mounted by the Video section for mp4 tracks);
+  // the app transport drives it directly for video, rodio for everything else.
+  const videoElRef = useRef<HTMLVideoElement | null>(null);
+
   const nextRef = useRef<() => void>(() => {});
   nextRef.current = () => {
     if (index < queue.length - 1) setIndex(index + 1);
@@ -279,6 +293,14 @@ export default function App() {
 
   function toggle() {
     if (!current) return;
+    if (currentIsMp4) {
+      const el = videoElRef.current;
+      if (!el) return;
+      if (el.paused) el.play().catch(() => {});
+      else el.pause();
+      setIsPlaying(!el.paused);
+      return;
+    }
     if (isPlaying) {
       setIsPlaying(false);
       audioPause().catch(() => {});
@@ -289,20 +311,25 @@ export default function App() {
   }
 
   function prev() {
-    if (currentTime > 3) {
-      audioSeek(0).catch(() => {});
+    const restart = () => {
+      if (currentIsMp4) {
+        if (videoElRef.current) videoElRef.current.currentTime = 0;
+      } else {
+        audioSeek(0).catch(() => {});
+      }
       setCurrentTime(0);
-      return;
-    }
+    };
+    if (currentTime > 3) return restart();
     if (index > 0) setIndex(index - 1);
-    else {
-      audioSeek(0).catch(() => {});
-      setCurrentTime(0);
-    }
+    else restart();
   }
 
   function seek(t: number) {
-    audioSeek(t).catch(() => {});
+    if (currentIsMp4) {
+      if (videoElRef.current) videoElRef.current.currentTime = t;
+    } else {
+      audioSeek(t).catch(() => {});
+    }
     setCurrentTime(t);
   }
 
@@ -310,6 +337,7 @@ export default function App() {
     setVolume(v);
     localStorage.setItem(VOLUME_KEY, String(v));
     audioSetVolume(v).catch(() => {});
+    if (videoElRef.current) videoElRef.current.volume = v;
   }
 
   // Push the restored volume to the audio engine once on startup so the
@@ -327,6 +355,14 @@ export default function App() {
     setCurrentTime(0);
     setDuration(current.duration ?? 0);
     setIsPlaying(true);
+    // mp4 → the <video> element owns playback (picture + sound); stop rodio,
+    // and make sure the Video panel is open so the element actually exists.
+    if (currentIsMp4) {
+      audioStop().catch(() => {});
+      setVidCollapsed(false);
+      if (videoElRef.current) videoElRef.current.volume = volume;
+      return;
+    }
     audioPlay(current.path).catch((e) => console.error("play failed", e));
     audioSetVolume(volume).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -337,6 +373,17 @@ export default function App() {
     if (!current) return;
     let alive = true;
     const id = setInterval(async () => {
+      // Video tracks: read position/duration straight off the <video> element
+      // (it owns playback). It may not exist yet if the panel is mid-mount.
+      if (currentIsMp4) {
+        const el = videoElRef.current;
+        if (!el || !alive) return;
+        setCurrentTime(el.currentTime || 0);
+        if (el.duration && isFinite(el.duration)) setDuration(el.duration);
+        setIsPlaying(!el.paused && !el.ended);
+        if (el.ended) nextRef.current();
+        return;
+      }
       try {
         const s = await audioStatus();
         if (!alive) return;
@@ -374,6 +421,7 @@ export default function App() {
     colCollapsed ? "2.5rem" : "minmax(0, 1.5fr)",
     plCollapsed ? "2.5rem" : "minmax(0, 1fr)",
     npCollapsed ? "2.5rem" : "300px",
+    vidCollapsed ? "2.5rem" : "minmax(0, 1fr)",
   ].join(" ");
 
   const albumCount = albums.length;
@@ -494,6 +542,19 @@ export default function App() {
                   </button>
                 ))}
               </div>
+              <button
+                onClick={() => setVideoOnly((v) => !v)}
+                title="Show only albums with video"
+                aria-pressed={videoOnly}
+                className={cn(
+                  "flex items-center gap-1 px-2 py-1 rounded-md text-[11px] shrink-0 transition-colors",
+                  videoOnly
+                    ? "bg-accent/20 text-accent"
+                    : "bg-surface/60 text-muted hover:text-fg/80",
+                )}
+              >
+                <Film size={12} /> Video
+              </button>
               <div className="relative flex-1 min-w-0">
                 <Search
                   size={13}
@@ -520,6 +581,7 @@ export default function App() {
                   onAddToPlaylist={addToPlaylist}
                   sort={sort}
                   filter={filter}
+                  videoOnly={videoOnly}
                 />
               )}
             </div>
@@ -584,6 +646,31 @@ export default function App() {
               </div>
             </Section>
           </div>
+        )}
+
+        {/* Video (scaffold — placeholder picture surface, last section) */}
+        {vidCollapsed ? (
+          <CollapsedStrip
+            title="Video"
+            icon={<Film size={15} />}
+            onExpand={() => setVidCollapsed(false)}
+          />
+        ) : (
+          <Section
+            title="Video"
+            icon={<Film size={15} />}
+            elastic
+            className="min-w-0"
+            onTitleClick={() => setVidCollapsed(true)}
+          >
+            <Video
+              track={current}
+              album={currentAlbum}
+              mediaBase={mediaBaseUrl}
+              volume={volume}
+              elRef={videoElRef}
+            />
+          </Section>
         )}
       </div>
 

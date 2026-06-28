@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::hash::{Hash, Hasher};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -1027,6 +1028,157 @@ fn audio_status(state: State<AudioState>) -> AudioStatus {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+// --- loopback media server ------------------------------------------------
+// WebKit2GTK can't play local media over app URI schemes (asset:// →
+// MediaError 4), so the webview <video> element streams from a tiny
+// 127.0.0.1 HTTP server with Range support instead. Loopback-only and it
+// only serves existing files the suite recognises as media.
+
+/// Base URL of the loopback media server (`http://127.0.0.1:<port>`).
+struct MediaServer {
+    base: String,
+}
+
+#[tauri::command]
+fn media_base(server: State<MediaServer>) -> String {
+    server.base.clone()
+}
+
+fn content_type_for(p: &Path) -> &'static str {
+    match p
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "mp4" | "m4v" => "video/mp4",
+        "webm" => "video/webm",
+        "mov" => "video/quicktime",
+        "mkv" => "video/x-matroska",
+        "ogv" => "video/ogg",
+        _ => "application/octet-stream",
+    }
+}
+
+/// Parse a `bytes=start-end` range against a known length. Supports an open
+/// end (`start-`) and a suffix range (`-N` = last N bytes).
+fn parse_range(header: &str, len: u64) -> Option<(u64, u64)> {
+    if len == 0 {
+        return None;
+    }
+    let spec = header.trim().strip_prefix("bytes=")?;
+    let (start_s, end_s) = spec.split_once('-')?;
+    if start_s.is_empty() {
+        let n: u64 = end_s.parse().ok()?;
+        if n == 0 {
+            return None;
+        }
+        return Some((len.saturating_sub(n), len - 1));
+    }
+    let start: u64 = start_s.parse().ok()?;
+    let end = if end_s.is_empty() {
+        len - 1
+    } else {
+        end_s.parse::<u64>().ok()?.min(len - 1)
+    };
+    if start > end {
+        return None;
+    }
+    Some((start, end))
+}
+
+fn header(name: &str, value: &str) -> tiny_http::Header {
+    tiny_http::Header::from_bytes(name.as_bytes(), value.as_bytes())
+        .expect("static header")
+}
+
+fn serve_media(req: tiny_http::Request) -> std::io::Result<()> {
+    // Pull the `path` query parameter and percent-decode it.
+    let url = req.url().to_string();
+    let query = url.splitn(2, '?').nth(1).unwrap_or("");
+    let raw = query.split('&').find_map(|pair| {
+        let (k, v) = pair.split_once('=')?;
+        (k == "path").then_some(v)
+    });
+    let path = match raw {
+        Some(v) => PathBuf::from(
+            percent_encoding::percent_decode_str(v)
+                .decode_utf8_lossy()
+                .into_owned(),
+        ),
+        None => return req.respond(tiny_http::Response::empty(400)),
+    };
+    if !path.is_file() || !is_media(&path) {
+        return req.respond(tiny_http::Response::empty(404));
+    }
+
+    let mut file = fs::File::open(&path)?;
+    let len = file.metadata()?.len();
+    let ctype = content_type_for(&path);
+    let range = req
+        .headers()
+        .iter()
+        .find(|h| h.field.equiv("Range"))
+        .map(|h| h.value.as_str().to_string());
+
+    let mut headers = vec![
+        header("Content-Type", ctype),
+        header("Accept-Ranges", "bytes"),
+        header("Access-Control-Allow-Origin", "*"),
+        header("Cache-Control", "no-store"),
+    ];
+
+    match range.and_then(|r| parse_range(&r, len)) {
+        Some((start, end)) => {
+            let chunk = end - start + 1;
+            file.seek(SeekFrom::Start(start))?;
+            headers.push(header(
+                "Content-Range",
+                &format!("bytes {start}-{end}/{len}"),
+            ));
+            let resp = tiny_http::Response::new(
+                tiny_http::StatusCode(206),
+                headers,
+                file.take(chunk),
+                Some(chunk as usize),
+                None,
+            );
+            req.respond(resp)
+        }
+        None => {
+            let resp = tiny_http::Response::new(
+                tiny_http::StatusCode(200),
+                headers,
+                file,
+                Some(len as usize),
+                None,
+            );
+            req.respond(resp)
+        }
+    }
+}
+
+/// Bind the loopback server on an ephemeral port and serve in a background
+/// thread. Returns the bound port.
+fn spawn_media_server() -> std::io::Result<u16> {
+    let server = tiny_http::Server::http("127.0.0.1:0")
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+    let port = server
+        .server_addr()
+        .to_ip()
+        .map(|a| a.port())
+        .unwrap_or(0);
+    std::thread::spawn(move || {
+        for req in server.incoming_requests() {
+            if let Err(e) = serve_media(req) {
+                eprintln!("media server error: {e}");
+            }
+        }
+    });
+    Ok(port)
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -1045,6 +1197,12 @@ pub fn run() {
             app.manage(AudioState {
                 tx: Mutex::new(tx),
                 shared,
+            });
+
+            // Loopback server for webview <video> playback of local media.
+            let media_port = spawn_media_server()?;
+            app.manage(MediaServer {
+                base: format!("http://127.0.0.1:{media_port}"),
             });
             Ok(())
         })
@@ -1065,7 +1223,8 @@ pub fn run() {
             audio_stop,
             audio_seek,
             audio_set_volume,
-            audio_status
+            audio_status,
+            media_base
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
