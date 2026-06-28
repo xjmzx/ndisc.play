@@ -85,9 +85,10 @@ export function Playlist({
                   active && "bg-surface/70",
                 )}
               >
-                <button
-                  onClick={() => onPlayAt(i)}
-                  className="flex items-center gap-2 min-w-0 flex-1 text-left"
+                <div
+                  onDoubleClick={() => onPlayAt(i)}
+                  title="Double-click to play"
+                  className="flex items-center gap-2 min-w-0 flex-1 text-left cursor-pointer select-none"
                 >
                   <span className="w-4 text-right text-[11px] text-muted tabular-nums shrink-0">
                     {i + 1}
@@ -98,7 +99,7 @@ export function Playlist({
                     </span>
                     {artist && <span className="text-muted"> · {artist}</span>}
                   </span>
-                </button>
+                </div>
                 {t.duration != null && (
                   <span className="text-[11px] text-muted tabular-nums shrink-0">
                     {formatTime(t.duration)}
