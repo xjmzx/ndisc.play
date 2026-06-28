@@ -384,6 +384,9 @@ struct ScanProgress {
     phase: String,
     done: usize,
     total: usize,
+    /// The file currently being read (read phase) — for a live "what's it
+    /// chewing on" line; empty for the walk/index/done phases.
+    path: String,
 }
 
 #[derive(Serialize)]
@@ -423,7 +426,7 @@ fn scan_library(app: AppHandle) -> Result<ScanSummary, String> {
     // 1. Walk for media files.
     let _ = app.emit(
         "scan-progress",
-        ScanProgress { phase: "walk".into(), done: 0, total: 0 },
+        ScanProgress { phase: "walk".into(), done: 0, total: 0, path: String::new() },
     );
     let files: Vec<PathBuf> = WalkDir::new(&root_pb)
         .into_iter()
@@ -433,22 +436,38 @@ fn scan_library(app: AppHandle) -> Result<ScanSummary, String> {
         .collect();
     let total = files.len();
 
-    // 2. Read tags in parallel. Emit periodic progress.
+    // 2. Read tags in parallel. Emit progress on a fine cadence (~200 ticks
+    //    across the whole library) so the header bar sweeps smoothly even on
+    //    a fast scan rather than jumping in coarse steps.
     let counter = AtomicUsize::new(0);
+    let step = (total / 200).max(1);
     let metas: Vec<FileMeta> = files
         .par_iter()
         .map(|p| {
             let m = read_meta(p);
             let done = counter.fetch_add(1, Ordering::Relaxed) + 1;
-            if done % 64 == 0 || done == total {
+            if done % step == 0 || done == total {
                 let _ = app.emit(
                     "scan-progress",
-                    ScanProgress { phase: "read".into(), done, total },
+                    ScanProgress {
+                        phase: "read".into(),
+                        done,
+                        total,
+                        path: p.to_string_lossy().into_owned(),
+                    },
                 );
             }
             m
         })
         .collect();
+
+    // Tags are read; the rest (grouping, cover extraction, DB rewrite) is a
+    // silent stretch on a large library, so flag an indeterminate "index"
+    // phase before it rather than letting the bar sit at 100%.
+    let _ = app.emit(
+        "scan-progress",
+        ScanProgress { phase: "index".into(), done: total, total, path: String::new() },
+    );
 
     // 3. Group by parent directory into albums.
     let mut groups: HashMap<PathBuf, Vec<FileMeta>> = HashMap::new();
@@ -565,7 +584,7 @@ fn scan_library(app: AppHandle) -> Result<ScanSummary, String> {
 
     let _ = app.emit(
         "scan-progress",
-        ScanProgress { phase: "done".into(), done: total, total },
+        ScanProgress { phase: "done".into(), done: total, total, path: String::new() },
     );
 
     Ok(ScanSummary {

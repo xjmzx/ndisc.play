@@ -35,9 +35,11 @@ export interface ScanSummary {
 }
 
 export interface ScanProgress {
-  phase: "walk" | "read" | "done" | string;
+  phase: "walk" | "read" | "index" | "done" | string;
   done: number;
   total: number;
+  /** Current file being read (read phase); empty otherwise. */
+  path: string;
 }
 
 export function getConfig(): Promise<{ musicRoot: string }> {

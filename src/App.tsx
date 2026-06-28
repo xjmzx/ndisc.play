@@ -21,6 +21,7 @@ import { NowPlaying } from "./components/NowPlaying";
 import { PlayerBar } from "./components/PlayerBar";
 import { Playlist } from "./components/Playlist";
 import { Queue } from "./components/Queue";
+import { ScanProgressBar } from "./components/ScanProgressBar";
 import {
   audioPause,
   audioPlay,
@@ -150,10 +151,14 @@ export default function App() {
 
   async function doScan() {
     setScanning(true);
-    setProgress({ phase: "walk", done: 0, total: 0 });
+    setProgress({ phase: "walk", done: 0, total: 0, path: "" });
     try {
       await scanLibrary();
       await refreshAlbums();
+      // The scan can finish in a second or two; hold a full "done" bar briefly
+      // so the user actually sees it complete instead of a flicker.
+      setProgress({ phase: "done", done: 1, total: 1, path: "" });
+      await new Promise((r) => setTimeout(r, 900));
     } catch (e) {
       console.error("scan failed", e);
     } finally {
@@ -372,12 +377,6 @@ export default function App() {
   ].join(" ");
 
   const albumCount = albums.length;
-  const scanLabel =
-    progress && progress.phase === "read" && progress.total
-      ? `${Math.round((progress.done / progress.total) * 100)}%`
-      : progress?.phase === "walk"
-        ? "scanning…"
-        : "";
 
   return (
     <div className="h-full flex flex-col bg-bg text-fg">
@@ -435,16 +434,17 @@ export default function App() {
         </div>
 
         <div className="flex items-center gap-3 shrink-0 justify-self-end">
-          {scanLabel && (
-            <span className="text-[12px] text-muted tabular-nums">
-              {scanLabel}
-            </span>
-          )}
+          {/* Permanent scan meter — muted track at rest, accent fill on scan. */}
+          <ScanProgressBar progress={progress} active={scanning} />
           <span className="text-[12px] text-muted">{albumCount} albums</span>
           <button
             onClick={doScan}
             disabled={scanning}
-            className="flex items-center gap-1.5 text-[12px] px-2.5 py-1 rounded-md bg-surface/70 hover:bg-surfaceHover disabled:opacity-50 transition-colors"
+            className={cn(
+              "flex items-center justify-center gap-1.5 min-w-[6.5rem] text-[12px] px-2.5 py-1 rounded-md transition-colors",
+              // Keep the rollover tint latched on while scanning (pressed look).
+              scanning ? "bg-surfaceHover" : "bg-surface/70 hover:bg-surfaceHover",
+            )}
           >
             {scanning ? (
               <Loader2 size={13} className="animate-spin" />
