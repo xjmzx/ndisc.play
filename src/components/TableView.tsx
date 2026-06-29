@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, Pencil } from "lucide-react";
+import { ArrowDown, ArrowUp, Pencil, Search } from "lucide-react";
 import { cn } from "../lib/cn";
 import { formatTime } from "../lib/format";
 import {
@@ -90,6 +90,7 @@ export function TableView({
   const [loading, setLoading] = useState(true);
   const [sortKey, setSortKey] = useState<SortKey>("artist");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
+  const [filter, setFilter] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -103,10 +104,22 @@ export function TableView({
     };
   }, [reloadKey]);
 
+  // Substring filter over artist / album / title, applied before sort.
+  const filtered = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    if (!q) return rows;
+    return rows.filter(
+      (t) =>
+        t.title.toLowerCase().includes(q) ||
+        t.artist.toLowerCase().includes(q) ||
+        t.album.toLowerCase().includes(q),
+    );
+  }, [rows, filter]);
+
   const sorted = useMemo(() => {
     const numeric = !!COLUMNS.find((c) => c.key === sortKey)?.numeric || sortKey === "playable";
-    return [...rows].sort((a, b) => compare(a, b, sortKey, sortDir, numeric));
-  }, [rows, sortKey, sortDir]);
+    return [...filtered].sort((a, b) => compare(a, b, sortKey, sortDir, numeric));
+  }, [filtered, sortKey, sortDir]);
 
   // --- virtualization ---
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -123,11 +136,11 @@ export function TableView({
     return () => ro.disconnect();
   }, []);
 
-  // Reset to the top when the sort or the underlying data changes.
+  // Reset to the top whenever the visible list changes (sort / filter / data).
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = 0;
     setScrollTop(0);
-  }, [sortKey, sortDir, rows]);
+  }, [sorted]);
 
   const total = sorted.length;
   const start = Math.max(0, Math.floor(scrollTop / ROW_H) - OVERSCAN);
@@ -147,10 +160,26 @@ export function TableView({
   return (
     <div className="rounded-xl bg-panel border border-surface/60 shadow-md flex flex-col min-h-0 h-full overflow-hidden">
       <div className="flex items-center gap-3 px-4 py-1.5 shrink-0 border-b border-surface/60 text-xs">
-        <span className="text-muted">
-          {loading ? "loading…" : `${rows.length} tracks`}
-          <span className="ml-3 text-muted/60">double-click a row to play</span>
+        <span className="text-muted shrink-0">
+          {loading
+            ? "loading…"
+            : filter.trim()
+              ? `${sorted.length} of ${rows.length} tracks`
+              : `${rows.length} tracks`}
         </span>
+        <span className="text-muted/60 shrink-0">double-click a row to play</span>
+        <div className="relative ml-auto w-56">
+          <Search
+            size={12}
+            className="absolute left-2 top-1/2 -translate-y-1/2 text-muted pointer-events-none"
+          />
+          <input
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder="Filter artist / album / title…"
+            className="w-full pl-7 pr-2 py-1 rounded bg-surface/60 text-[12px] placeholder:text-muted/60 focus:outline-none focus:ring-1 focus:ring-accent/40"
+          />
+        </div>
       </div>
 
       <div
