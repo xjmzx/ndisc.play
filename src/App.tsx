@@ -879,7 +879,9 @@ export default function App() {
               onTitleClick={() => setNpCollapsed(true)}
             >
               <div className="flex-1 min-h-0">
-                <Spectrum active={!!current} />
+                {/* Only animate while actually playing — gating on a loaded
+                    track alone polled at 30fps even while paused. */}
+                <Spectrum active={isPlaying} />
               </div>
             </Section>
           </div>

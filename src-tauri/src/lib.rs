@@ -1363,15 +1363,21 @@ fn spawn_spectrum_thread(spec: Arc<SpectrumShared>) {
         let mut buf = vec![Complex::<f32>::new(0.0, 0.0); SPEC_WINDOW];
         let mut bars = vec![0.0f32; SPEC_BARS];
         let mut last_written = 0u64;
+        // After a stretch with no new samples (paused / stopped / nothing
+        // loaded) the thread backs off to a slow idle tick so it isn't waking
+        // ~30×/s for nothing; it snaps back to 30fps as soon as samples flow.
+        let mut idle_ticks = 0u32;
         let nyq = SPEC_WINDOW / 2;
 
         loop {
-            std::thread::sleep(Duration::from_millis(33)); // ~30fps
+            let nap = if idle_ticks > 15 { 150 } else { 33 };
+            std::thread::sleep(Duration::from_millis(nap));
             let written = spec.written.load(Ordering::Relaxed);
             let advancing = written != last_written;
             last_written = written;
 
             if advancing {
+                idle_ticks = 0;
                 if let Ok(ring) = spec.ring.lock() {
                     ring.snapshot(&mut scratch);
                 }
@@ -1405,7 +1411,9 @@ fn spawn_spectrum_thread(spec: Arc<SpectrumShared>) {
                     }
                 }
             } else {
-                // Paused / stopped — let the bars settle to rest.
+                // Paused / stopped — let the bars settle to rest, and count
+                // toward the idle back-off.
+                idle_ticks = idle_ticks.saturating_add(1);
                 for bar in bars.iter_mut() {
                     *bar *= 0.85;
                 }
