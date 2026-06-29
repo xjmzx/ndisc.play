@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import {
   AudioLines,
@@ -131,6 +132,7 @@ function usePersistedBool(key: string, def = false) {
 
 export default function App() {
   const [musicRoot, setRoot] = useState("");
+  const [appVersion, setAppVersion] = useState<string | null>(null);
   const [mediaBaseUrl, setMediaBaseUrl] = useState("");
   const [albums, setAlbums] = useState<Album[]>([]);
   const [stats, setStats] = useState<LibraryStats | null>(null);
@@ -198,6 +200,9 @@ export default function App() {
 
   useEffect(() => {
     getConfig().then((c) => setRoot(c.musicRoot));
+    getVersion()
+      .then(setAppVersion)
+      .catch(() => setAppVersion(null));
     mediaBase().then(setMediaBaseUrl).catch(() => {});
     refreshAlbums();
     const un = onScanProgress(setProgress);
@@ -599,6 +604,11 @@ export default function App() {
           <h1 className="text-sm font-semibold tracking-wide shrink-0">
             ndisc<span className="text-muted">.play</span>
           </h1>
+          {appVersion && (
+            <span className="hidden md:inline-flex items-center px-2 py-1 rounded-md bg-surface text-mauve font-mono text-[11px] shrink-0">
+              v{appVersion}
+            </span>
+          )}
           <button
             onClick={chooseRoot}
             title="Choose music folder"

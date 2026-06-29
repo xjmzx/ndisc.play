@@ -7,6 +7,11 @@ app's own semver, below.
 
 ## 0.1.0-beta.1 — unreleased
 
+### Header version chip — 2026-06-29
+- The app version (`getVersion()` → `tauri.conf.json`) is pinned in the header
+  beside the title as a `v0.1.0-beta.1` chip, matching the suite's mauve mono
+  chip (ndisc / smpl / tree).
+
 ### Unplayable-format detection at scan — 2026-06-29
 - **Scan-time `playable` flag.** Formats the audio backend has no decoder for
   (APE, WMA, WavPack, TAK) are now flagged during the scan from the file
