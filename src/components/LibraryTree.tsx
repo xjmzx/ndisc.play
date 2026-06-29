@@ -13,8 +13,8 @@ import { listAlbumTracks, type Album, type Track } from "../lib/tauri";
 
 export type SortKey = "artist" | "album" | "year";
 
-/** mp4 is the format that actually plays with picture (others are audio-only). */
-const isMp4 = (p: string) => /\.mp4$/i.test(p);
+/** mp4/m4v play with picture (h264/aac/ac3 via WebKit+libav); others audio-only. */
+const isPlayableVideo = (p: string) => /\.(mp4|m4v)$/i.test(p);
 
 interface LibraryTreeProps {
   albums: Album[];
@@ -249,7 +249,7 @@ function LibraryTreeImpl({
                             : tracks
                           ).map((t, i, shown) => {
                             const active = t.id === currentTrackId;
-                            const playableVideo = t.isVideo && isMp4(t.path);
+                            const playableVideo = t.isVideo && isPlayableVideo(t.path);
                             const unplayable = t.playable === false;
                             return (
                               <div

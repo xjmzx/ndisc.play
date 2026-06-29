@@ -180,9 +180,12 @@ export default function App() {
 
   const current =
     index >= 0 && index < playlist.length ? playlist[index] : null;
-  // mp4 videos are driven by the webview <video> element (rodio can't draw a
-  // picture); everything else (audio + non-mp4 video audio) goes to rodio.
-  const currentIsMp4 = !!current?.isVideo && /\.mp4$/i.test(current.path);
+  // Picture-playable video = an mp4/m4v container (h264/aac/ac3 all play via
+  // WebKit2GTK+libav over the loopback server); these route to the <video>
+  // element. Other containers (mkv/avi/mpg/…) stay rodio audio-only until a
+  // future ntree normalize pass remuxes them to mp4.
+  const currentIsPlayableVideo =
+    !!current?.isVideo && /\.(mp4|m4v)$/i.test(current.path);
 
   const albumById = useMemo(() => {
     const m = new Map<number, Album>();
@@ -260,7 +263,7 @@ export default function App() {
   function restartCurrent() {
     setCurrentTime(0);
     setIsPlaying(true);
-    if (currentIsMp4) {
+    if (currentIsPlayableVideo) {
       const el = videoElRef.current;
       if (el) {
         el.currentTime = 0;
@@ -454,7 +457,7 @@ export default function App() {
 
   function toggle() {
     if (!current) return;
-    if (currentIsMp4) {
+    if (currentIsPlayableVideo) {
       const el = videoElRef.current;
       if (!el) return;
       if (el.paused) el.play().catch(() => {});
@@ -499,7 +502,7 @@ export default function App() {
 
   function prev() {
     const restart = () => {
-      if (currentIsMp4) {
+      if (currentIsPlayableVideo) {
         if (videoElRef.current) videoElRef.current.currentTime = 0;
       } else {
         audioSeek(0).catch(() => {});
@@ -520,7 +523,7 @@ export default function App() {
   }
 
   function seek(t: number) {
-    if (currentIsMp4) {
+    if (currentIsPlayableVideo) {
       if (videoElRef.current) videoElRef.current.currentTime = t;
     } else {
       audioSeek(t).catch(() => {});
@@ -552,7 +555,7 @@ export default function App() {
     setIsPlaying(true);
     // mp4 → the <video> element owns playback (picture + sound); stop rodio,
     // and make sure the Video panel is open so the element actually exists.
-    if (currentIsMp4) {
+    if (currentIsPlayableVideo) {
       audioStop().catch(() => {});
       setVidCollapsed(false);
       if (videoElRef.current) videoElRef.current.volume = volume;
@@ -570,7 +573,7 @@ export default function App() {
     const id = setInterval(async () => {
       // Video tracks: read position/duration straight off the <video> element
       // (it owns playback). It may not exist yet if the panel is mid-mount.
-      if (currentIsMp4) {
+      if (currentIsPlayableVideo) {
         const el = videoElRef.current;
         if (!el || !alive) return;
         setCurrentTime(el.currentTime || 0);

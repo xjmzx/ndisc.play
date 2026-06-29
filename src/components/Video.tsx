@@ -14,7 +14,9 @@ interface VideoProps {
   elRef: RefObject<HTMLVideoElement | null>;
 }
 
-const isMp4 = (p: string) => /\.mp4$/i.test(p);
+// mp4 + m4v both play with picture (h264/aac/ac3 via WebKit2GTK+libav over the
+// loopback server); other containers are audio-only until remuxed.
+const isPlayableVideo = (p: string) => /\.(mp4|m4v)$/i.test(p);
 
 /**
  * VIDEO — the 4th section. mp4 plays in a webview <video> element streamed
@@ -26,7 +28,7 @@ const isMp4 = (p: string) => /\.mp4$/i.test(p);
  */
 export function Video({ track, mediaBase, volume, elRef }: VideoProps) {
   const [error, setError] = useState(false);
-  const playable = !!track?.isVideo && isMp4(track.path) && !!mediaBase;
+  const playable = !!track?.isVideo && isPlayableVideo(track.path) && !!mediaBase;
 
   if (playable) {
     return (
