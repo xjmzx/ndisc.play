@@ -5,7 +5,7 @@ siblings (ndisc / ndisc.view / glmps), nplay is a local player and **not** a
 participant in the ndisc Nostr wire contract, so it tracks a single axis: this
 app's own semver, below.
 
-## 0.1.0-beta.1 — unreleased
+## 0.1.0-beta.1 — 2026-06-29
 
 ### Header version chip — 2026-06-29
 - The app version (`getVersion()` → `tauri.conf.json`) is pinned in the header
