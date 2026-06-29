@@ -20,7 +20,7 @@ interface LibraryTreeProps {
   albums: Album[];
   /** Id of the track currently loaded in the transport (for highlight). */
   currentTrackId: number | null;
-  /** Play `tracks` starting at `startIndex` (replaces the queue). */
+  /** Play `tracks` starting at `startIndex` (replaces the playlist). */
   onPlay: (tracks: Track[], startIndex: number) => void;
   /** Append tracks to the playlist. */
   onAddToPlaylist: (tracks: Track[]) => void;
@@ -245,6 +245,7 @@ export function LibraryTree({
                           ).map((t, i, shown) => {
                             const active = t.id === currentTrackId;
                             const playableVideo = t.isVideo && isMp4(t.path);
+                            const unplayable = t.playable === false;
                             return (
                               <div
                                 key={t.id}
@@ -252,6 +253,11 @@ export function LibraryTree({
                                   "group flex items-center gap-2 px-2 py-1 rounded hover:bg-surface/50",
                                   active && "bg-surface/70",
                                 )}
+                                title={
+                                  unplayable
+                                    ? `${t.codec ?? "This format"} can't be decoded — will be skipped`
+                                    : undefined
+                                }
                               >
                                 <button
                                   onDoubleClick={() => onPlay(shown, i)}
@@ -271,16 +277,23 @@ export function LibraryTree({
                                   <span
                                     className={cn(
                                       "truncate flex-1",
-                                      active
-                                        ? "text-accent"
-                                        : playableVideo
-                                          ? "text-digital"
-                                          : "text-fg/75",
+                                      unplayable
+                                        ? "text-muted/50 line-through decoration-muted/30"
+                                        : active
+                                          ? "text-accent"
+                                          : playableVideo
+                                            ? "text-digital"
+                                            : "text-fg/75",
                                     )}
                                   >
                                     {t.title}
                                   </span>
                                 </button>
+                                {unplayable && (
+                                  <span className="shrink-0 text-[9px] font-medium tracking-wide text-auburn border border-auburn/40 rounded px-1 leading-tight">
+                                    {t.codec ?? "?"}
+                                  </span>
+                                )}
                                 {t.isVideo && (
                                   <Film
                                     size={11}

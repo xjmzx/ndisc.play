@@ -26,6 +26,14 @@ export interface Track {
   sampleRate: number | null;
   bitDepth: number | null;
   isVideo: boolean;
+  /** False when the audio backend has no decoder for this format (APE/WMA/
+   *  WavPack/TAK) — known at scan time from the extension. */
+  playable: boolean;
+}
+
+export interface LibraryStats {
+  tracks: number;
+  unplayable: number;
 }
 
 export interface ScanSummary {
@@ -65,6 +73,11 @@ export function listAlbumTracks(albumId: number): Promise<Track[]> {
 /** Resolve file paths back to library tracks (missing paths are omitted). */
 export function tracksByPaths(paths: string[]): Promise<Track[]> {
   return invoke("tracks_by_paths", { paths });
+}
+
+/** Headline library counts (total tracks + how many can't be decoded). */
+export function libraryStats(): Promise<LibraryStats> {
+  return invoke("library_stats");
 }
 
 export function readTextFile(path: string): Promise<string> {
@@ -135,4 +148,10 @@ export function audioSetVolume(volume: number): Promise<void> {
 }
 export function audioStatus(): Promise<AudioStatus> {
   return invoke("audio_status");
+}
+
+/** Latest spectrum bar magnitudes (0..1), recomputed in Rust ~30×/s. The
+ *  Now-playing visualizer polls this on a rAF loop. */
+export function audioSpectrum(): Promise<number[]> {
+  return invoke("audio_spectrum");
 }

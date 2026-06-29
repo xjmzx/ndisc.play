@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import {
+  AudioLines,
   Film,
   FolderOpen,
   ListMusic,
@@ -10,7 +11,10 @@ import {
   Pause,
   Play,
   RefreshCw,
+  Repeat,
+  Repeat1,
   Search,
+  Shuffle,
   SkipBack,
   SkipForward,
 } from "lucide-react";
@@ -21,8 +25,8 @@ import { LibraryTree, type SortKey } from "./components/LibraryTree";
 import { NowPlaying } from "./components/NowPlaying";
 import { PlayerBar } from "./components/PlayerBar";
 import { Playlist } from "./components/Playlist";
-import { Queue } from "./components/Queue";
 import { ScanProgressBar } from "./components/ScanProgressBar";
+import { Spectrum } from "./components/Spectrum";
 import { Video } from "./components/Video";
 import {
   audioPause,
@@ -34,6 +38,7 @@ import {
   audioStop,
   defaultPlaylistDir,
   getConfig,
+  libraryStats,
   listAlbums,
   mediaBase,
   onScanProgress,
@@ -43,6 +48,7 @@ import {
   tracksByPaths,
   writeTextFile,
   type Album,
+  type LibraryStats,
   type ScanProgress,
   type Track,
 } from "./lib/tauri";
@@ -50,6 +56,29 @@ import { buildXspf, parseXspf, type XspfItem } from "./lib/xspf";
 
 const VOLUME_KEY = "nplay.volume";
 const PLAYLIST_KEY = "nplay.playlist";
+const REPEAT_KEY = "nplay.repeat";
+const SHUFFLE_KEY = "nplay.shuffle";
+
+type RepeatMode = "off" | "all" | "one";
+
+/** A shuffled permutation of [0..len), with `first` (the current track) moved
+ *  to the front so shuffle continues from what's playing. Fisher–Yates, so
+ *  every track appears once — no track repeats until the list is exhausted. */
+function makeShuffleOrder(len: number, first: number): number[] {
+  const order = Array.from({ length: len }, (_, i) => i);
+  for (let i = len - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [order[i], order[j]] = [order[j], order[i]];
+  }
+  if (first >= 0) {
+    const k = order.indexOf(first);
+    if (k > 0) {
+      order.splice(k, 1);
+      order.unshift(first);
+    }
+  }
+  return order;
+}
 
 /** Minimal persisted playlist entry (path is the stable key). */
 interface SavedEntry {
@@ -73,6 +102,7 @@ function synthTrack(e: SavedEntry | XspfItem, i: number): Track {
     sampleRate: null,
     bitDepth: null,
     isVideo: false,
+    playable: true,
   };
 }
 
@@ -103,13 +133,26 @@ export default function App() {
   const [musicRoot, setRoot] = useState("");
   const [mediaBaseUrl, setMediaBaseUrl] = useState("");
   const [albums, setAlbums] = useState<Album[]>([]);
+  const [stats, setStats] = useState<LibraryStats | null>(null);
   const [loadingAlbums, setLoadingAlbums] = useState(true);
   const [scanning, setScanning] = useState(false);
   const [progress, setProgress] = useState<ScanProgress | null>(null);
 
-  const [queue, setQueue] = useState<Track[]>([]);
-  const [index, setIndex] = useState(-1);
+  // The playlist IS the play queue: `index` points at the track playing
+  // within it. Building a list (add / load) and playing it are the same list,
+  // so there's no separate ephemeral queue to mirror.
   const [playlist, setPlaylist] = useState<Track[]>([]);
+  const [index, setIndex] = useState(-1);
+  const [repeat, setRepeat] = useState<RepeatMode>(() => {
+    const s = localStorage.getItem(REPEAT_KEY);
+    return s === "all" || s === "one" ? s : "off";
+  });
+  const [shuffle, setShuffle] = useState(
+    () => localStorage.getItem(SHUFFLE_KEY) === "1",
+  );
+  // Shuffle play order: a permutation of playlist indices walked by next/prev
+  // while shuffle is on. Regenerated when shuffle turns on or the list resizes.
+  const [order, setOrder] = useState<number[]>([]);
   const [playlistDir, setPlaylistDir] = useState<string | null>(null);
   const [sort, setSort] = useState<SortKey>("artist");
   const [filter, setFilter] = useState("");
@@ -127,7 +170,8 @@ export default function App() {
     return isFinite(v) ? Math.min(1, Math.max(0, v)) : 1;
   });
 
-  const current = index >= 0 && index < queue.length ? queue[index] : null;
+  const current =
+    index >= 0 && index < playlist.length ? playlist[index] : null;
   // mp4 videos are driven by the webview <video> element (rodio can't draw a
   // picture); everything else (audio + non-mp4 video audio) goes to rodio.
   const currentIsMp4 = !!current?.isVideo && /\.mp4$/i.test(current.path);
@@ -144,6 +188,9 @@ export default function App() {
     setLoadingAlbums(true);
     try {
       setAlbums(await listAlbums());
+      libraryStats()
+        .then(setStats)
+        .catch(() => {});
     } finally {
       setLoadingAlbums(false);
     }
@@ -195,32 +242,104 @@ export default function App() {
   // the app transport drives it directly for video, rodio for everything else.
   const videoElRef = useRef<HTMLVideoElement | null>(null);
 
-  const nextRef = useRef<() => void>(() => {});
-  nextRef.current = () => {
-    if (index < queue.length - 1) setIndex(index + 1);
-    else {
+  // Replay the current track from the top (Repeat One, and the wrap-to-self
+  // case). The play effect keys on track id, so a same-index replay won't
+  // retrigger it — we kick playback directly.
+  function restartCurrent() {
+    setCurrentTime(0);
+    setIsPlaying(true);
+    if (currentIsMp4) {
+      const el = videoElRef.current;
+      if (el) {
+        el.currentTime = 0;
+        el.play().catch(() => {});
+      }
+    } else if (current) {
+      audioPlay(current.path).catch(() => {});
+    }
+  }
+
+  // The playable tracks in play order (shuffled when shuffle is on), with
+  // undecodable formats (APE/WMA/…) dropped so prev/next/auto-advance never
+  // target them. Manual selection can still land on one (the play-time skip
+  // is the backstop). `playable !== false` so synthesized tracks count.
+  function playableSeq(): number[] {
+    const len = playlist.length;
+    const base =
+      shuffle && order.length === len ? order : playlist.map((_, i) => i);
+    return base.filter((i) => playlist[i]?.playable !== false);
+  }
+
+  // Advance handler, held in a ref so the 250ms poll never closes over stale
+  // index/playlist/mode state. `auto` = the track ended on its own (honours
+  // Repeat One); a user skip or an error-skip passes false so it never traps
+  // on one track. Honours Shuffle and Repeat All, over the playable sequence.
+  const advanceRef = useRef<(auto: boolean) => void>(() => {});
+  advanceRef.current = (auto: boolean) => {
+    if (playlist.length === 0) return;
+    if (auto && repeat === "one") {
+      restartCurrent();
+      return;
+    }
+    const seq = playableSeq();
+    if (seq.length === 0) {
       setIsPlaying(false);
       audioStop().catch(() => {});
+      return;
+    }
+    const pos = seq.indexOf(index);
+    let next: number | null = null;
+    if (pos === -1) {
+      next = seq[0]; // current isn't a playable target → first playable
+    } else if (pos < seq.length - 1) {
+      next = seq[pos + 1];
+    } else if (repeat === "all") {
+      if (shuffle) {
+        const fresh = makeShuffleOrder(playlist.length, -1);
+        setOrder(fresh);
+        next = fresh.find((i) => playlist[i]?.playable !== false) ?? null;
+      } else {
+        next = seq[0];
+      }
+    }
+    if (next === null) {
+      setIsPlaying(false);
+      audioStop().catch(() => {});
+    } else if (next === index) {
+      restartCurrent();
+    } else {
+      setIndex(next);
     }
   };
 
+  // Play a fresh selection (e.g. an album from the Collection): it replaces
+  // the playlist and starts at `startIndex`. The `＋` buttons are the
+  // non-destructive path (append without disturbing what's playing).
   function play(tracks: Track[], startIndex: number) {
-    setQueue(tracks);
-    setIndex(startIndex);
+    if (!tracks.length) return;
+    setPlaylist(tracks);
+    setIndex(Math.max(0, Math.min(startIndex, tracks.length - 1)));
   }
 
-  // --- playlist (staging list; playing it loads it into the queue) ---------
+  // --- playlist (the live play queue) --------------------------------------
   function addToPlaylist(tracks: Track[]) {
     setPlaylist((p) => [...p, ...tracks]);
   }
   function playPlaylistAt(i: number) {
-    if (playlist.length) play(playlist, Math.max(0, Math.min(i, playlist.length - 1)));
+    if (playlist.length) setIndex(Math.max(0, Math.min(i, playlist.length - 1)));
   }
   function removeFromPlaylist(i: number) {
     setPlaylist((p) => p.filter((_, j) => j !== i));
+    // Keep the highlight on the same track: a removal before it shifts it
+    // down by one; removing it or a later one leaves the index (a removed
+    // current lets the next track slide into the slot).
+    setIndex((idx) => (i < idx ? idx - 1 : idx));
   }
   function clearPlaylist() {
     setPlaylist([]);
+    setIndex(-1);
+    audioStop().catch(() => {});
+    if (videoElRef.current) videoElRef.current.pause();
   }
 
   // Auto-persist the working playlist by path, and restore it on launch
@@ -254,6 +373,29 @@ export default function App() {
     }));
     localStorage.setItem(PLAYLIST_KEY, JSON.stringify(entries));
   }, [playlist]);
+
+  // Persist the play modes.
+  useEffect(() => {
+    localStorage.setItem(REPEAT_KEY, repeat);
+  }, [repeat]);
+  useEffect(() => {
+    localStorage.setItem(SHUFFLE_KEY, shuffle ? "1" : "0");
+  }, [shuffle]);
+
+  // (Re)build the shuffle order when shuffle turns on or the list resizes,
+  // keeping the current track at the front. Deliberately not keyed on `index`
+  // (a track change shouldn't reshuffle); reading it here is fine.
+  useEffect(() => {
+    if (shuffle) setOrder(makeShuffleOrder(playlist.length, index));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shuffle, playlist.length]);
+
+  function cycleRepeat() {
+    setRepeat((r) => (r === "off" ? "all" : r === "all" ? "one" : "off"));
+  }
+  function toggleShuffle() {
+    setShuffle((s) => !s);
+  }
 
   // Import a Strawberry/XSPF playlist into the working list.
   async function loadPlaylistFile() {
@@ -319,9 +461,17 @@ export default function App() {
       }
       setCurrentTime(0);
     };
+    // Past the first few seconds, "previous" restarts the track (familiar
+    // transport behaviour) rather than stepping back.
     if (currentTime > 3) return restart();
-    if (index > 0) setIndex(index - 1);
-    else restart();
+    const seq = playableSeq();
+    const pos = seq.indexOf(index);
+    let p: number | null = null;
+    if (pos === -1) p = seq[0] ?? null;
+    else if (pos > 0) p = seq[pos - 1];
+    else if (repeat === "all") p = seq[seq.length - 1];
+    if (p === null) restart();
+    else setIndex(p);
   }
 
   function seek(t: number) {
@@ -381,21 +531,22 @@ export default function App() {
         setCurrentTime(el.currentTime || 0);
         if (el.duration && isFinite(el.duration)) setDuration(el.duration);
         setIsPlaying(!el.paused && !el.ended);
-        if (el.ended) nextRef.current();
+        if (el.ended) advanceRef.current(true);
         return;
       }
       try {
         const s = await audioStatus();
         if (!alive) return;
         // A failed load (undecodable / audioless video) — skip to next.
+        // `false` so a broken track can't trap us under Repeat One.
         if (s.error) {
-          nextRef.current();
+          advanceRef.current(false);
           return;
         }
         setCurrentTime(s.positionMs / 1000);
         if (s.durationMs > 0) setDuration(s.durationMs / 1000);
         setIsPlaying(s.playing);
-        if (s.finished) nextRef.current();
+        if (s.finished) advanceRef.current(true);
       } catch {
         /* transient */
       }
@@ -407,13 +558,26 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current?.id]);
 
-  const canNext = index >= 0 && index < queue.length - 1;
+  // Next is meaningful unless we're on the last track with no wrap (sequential,
+  // repeat off); shuffle/repeat-all always have somewhere to go.
+  const canNext =
+    index >= 0 &&
+    (repeat === "all" || shuffle || index < playlist.length - 1);
 
   // Header master-transport button — matches ndisc.smpl's MasterStrip
   // styling (h-8 square, surface fill, accent glyph) for suite consistency.
   const hdrBtn =
     "h-8 w-8 rounded-md bg-surface text-accent hover:bg-accent/15 transition-colors " +
     "flex items-center justify-center shrink-0 disabled:opacity-40 disabled:hover:bg-surface";
+  // Mode-toggle variant: same footprint, but tinted when active and muted
+  // when off (it's a state indicator, not a one-shot action).
+  const modeBtn = (on: boolean) =>
+    cn(
+      "h-8 w-8 rounded-md flex items-center justify-center shrink-0 transition-colors",
+      on
+        ? "bg-accent/20 text-accent hover:bg-accent/25"
+        : "bg-surface text-muted hover:text-fg/80 hover:bg-accent/10",
+    );
 
   // Collapse-flanks: each column is its content width or a 2.5rem sliver.
   // Collection is the greedy fr so collapsing a neighbour widens it.
@@ -448,6 +612,15 @@ export default function App() {
         {/* Master transport — mirrors the bottom bar; matches smpl's header. */}
         <div className="inline-flex gap-1 justify-self-center">
           <button
+            onClick={toggleShuffle}
+            title={shuffle ? "Shuffle: on" : "Shuffle: off"}
+            aria-label="Shuffle"
+            aria-pressed={shuffle}
+            className={modeBtn(shuffle)}
+          >
+            <Shuffle size={14} />
+          </button>
+          <button
             onClick={prev}
             disabled={!current}
             title="Previous"
@@ -471,7 +644,7 @@ export default function App() {
             )}
           </button>
           <button
-            onClick={() => nextRef.current()}
+            onClick={() => advanceRef.current(false)}
             disabled={!canNext}
             title="Next"
             aria-label="Next"
@@ -479,12 +652,39 @@ export default function App() {
           >
             <SkipForward size={15} fill="currentColor" />
           </button>
+          <button
+            onClick={cycleRepeat}
+            title={
+              repeat === "off"
+                ? "Repeat: off"
+                : repeat === "all"
+                  ? "Repeat: all"
+                  : "Repeat: one"
+            }
+            aria-label="Repeat"
+            aria-pressed={repeat !== "off"}
+            className={modeBtn(repeat !== "off")}
+          >
+            {repeat === "one" ? <Repeat1 size={14} /> : <Repeat size={14} />}
+          </button>
         </div>
 
         <div className="flex items-center gap-3 shrink-0 justify-self-end">
           {/* Permanent scan meter — muted track at rest, accent fill on scan. */}
           <ScanProgressBar progress={progress} active={scanning} />
-          <span className="text-[12px] text-muted">{albumCount} albums</span>
+          <span className="text-[12px] text-muted whitespace-nowrap">
+            {albumCount} albums
+            {stats ? ` · ${stats.tracks} tracks` : ""}
+            {stats && stats.unplayable > 0 ? (
+              <span
+                className="text-auburn"
+                title={`${stats.unplayable} track${stats.unplayable === 1 ? "" : "s"} can't be decoded (APE/WMA/WavPack/TAK) and will be skipped`}
+              >
+                {" · "}
+                {stats.unplayable} unplayable
+              </span>
+            ) : null}
+          </span>
           <button
             onClick={doScan}
             disabled={scanning}
@@ -504,7 +704,7 @@ export default function App() {
         </div>
       </header>
 
-      {/* Main — Collection · Playlist · (Now playing + Queue), collapsible */}
+      {/* Main — Collection · Playlist · (Now playing + Spectrum) · Video */}
       <div
         className="flex-1 min-h-0 grid gap-3 p-3"
         style={{ gridTemplateColumns: mainCols }}
@@ -618,7 +818,7 @@ export default function App() {
           </Section>
         )}
 
-        {/* Now playing + queue */}
+        {/* Now playing + spectrum */}
         {npCollapsed ? (
           <CollapsedStrip
             title="Now playing"
@@ -635,14 +835,14 @@ export default function App() {
               <NowPlaying track={current} album={currentAlbum} />
             </Section>
             <Section
-              title="Queue"
-              icon={<ListMusic size={15} />}
+              title="Spectrum"
+              icon={<AudioLines size={15} />}
               elastic
               className="flex-1"
               onTitleClick={() => setNpCollapsed(true)}
             >
-              <div className="flex-1 min-h-0 overflow-y-auto pr-1 [scrollbar-gutter:stable]">
-                <Queue queue={queue} index={index} onJump={setIndex} />
+              <div className="flex-1 min-h-0">
+                <Spectrum active={!!current} />
               </div>
             </Section>
           </div>

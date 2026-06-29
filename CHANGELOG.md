@@ -7,6 +7,48 @@ app's own semver, below.
 
 ## 0.1.0-beta.1 — unreleased
 
+### Unplayable-format detection at scan — 2026-06-29
+- **Scan-time `playable` flag.** Formats the audio backend has no decoder for
+  (APE, WMA, WavPack, TAK) are now flagged during the scan from the file
+  extension — no probing needed — so the UI can warn before you click. (A
+  corrupt-but-valid file of a supported format is still caught by the existing
+  play-time skip.)
+- **Visual treatment.** Unplayable tracks are dimmed + struck through in the
+  Collection and Playlist, with a small format badge (e.g. `APE`) and a
+  "can't be decoded — will be skipped" tooltip.
+- **Skipped by playback.** Prev/next, auto-advance and shuffle all walk only
+  the playable tracks, so playback never lands on a dead format (manual
+  double-click still attempts it, with the skip as backstop).
+- **Library summary** in the header — `N albums · M tracks · K unplayable` —
+  so you can see what a scan brought in. Requires a re-scan to populate the
+  flag for an existing library.
+
+### Shuffle + repeat — 2026-06-29
+- **Repeat** button in the header transport cycles **Off → All → One**
+  (`Repeat`/`Repeat1` glyphs). With the unified playlist this covers every
+  loop scope: loop a release (play the album + Repeat All), loop the playlist
+  (Repeat All), or loop the current track (Repeat One).
+- **Shuffle** toggle plays the list in a random order. Proper play-through
+  shuffle — a Fisher–Yates permutation keeping the current track first — so
+  every track plays once before any repeats (not naive re-rolling). Prev/next
+  walk the shuffled order; Repeat All reshuffles at the end of a pass.
+- Both modes persist across launches; a user skip never traps on a track under
+  Repeat One, and an undecodable track still skips forward rather than looping.
+
+### Now-playing spectrum + queue/playlist unification — 2026-06-29
+- **Playlist is now the play queue.** Removed the separate Queue panel: the
+  playlist is the single live list, with `index` marking the playing track.
+  Playing an album from the Collection replaces the list and starts there;
+  the `＋` buttons remain the non-destructive append. Removing/clearing keeps
+  the highlight sane and stops playback when the list is emptied.
+- **Real-time spectrum visualiser** fills the freed Now-playing space. Audio
+  is decoded by rodio in Rust (outside the webview, where Web Audio is muted),
+  so a `SpectrumTap` mirrors the sample stream into a ring buffer; a dedicated
+  thread runs a Hann-windowed FFT (`rustfft`) ~30×/s and folds it into 28
+  log-spaced bars (40Hz–16kHz, dB-scaled, fast-attack/slow-decay). The
+  frontend polls the bars onto a canvas on a rAF loop — no per-frame React
+  render — and they settle to rest when paused/stopped.
+
 ### VIDEO section — picture playback — 2026-06-28
 - **4th section: Video** (right-most, collapsible). mp4 now plays with picture
   in a webview `<video>` element.

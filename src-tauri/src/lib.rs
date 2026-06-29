@@ -13,7 +13,7 @@ use std::hash::{Hash, Hasher};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use lofty::config::{ParseOptions, ParsingMode};
@@ -62,6 +62,18 @@ fn is_video(p: &Path) -> bool {
 }
 fn is_media(p: &Path) -> bool {
     is_audio(p) || is_video(p)
+}
+
+// Audio formats the rodio/symphonia backend has no decoder for, so we know at
+// scan time they can't play (no probing needed — the extension is enough).
+// Monkey's Audio, WavPack, TAK, Windows Media. Everything else in AUDIO_EXTS
+// decodes via `symphonia-all`; the rare corrupt-but-valid file is still caught
+// by the play-time error skip. Video is always "playable" (mp4 shows picture,
+// other containers play audio via the ffmpeg path).
+const UNDECODABLE_AUDIO_EXTS: &[&str] = &["ape", "wv", "tak", "wma"];
+
+fn is_playable(p: &Path) -> bool {
+    !has_ext(p, UNDECODABLE_AUDIO_EXTS)
 }
 
 // ---- app data dir / config / db -------------------------------------------
@@ -127,7 +139,8 @@ CREATE TABLE IF NOT EXISTS tracks (
   codec       TEXT,
   sample_rate INTEGER,
   bit_depth   INTEGER,
-  is_video    INTEGER NOT NULL DEFAULT 0
+  is_video    INTEGER NOT NULL DEFAULT 0,
+  playable    INTEGER NOT NULL DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS idx_tracks_album ON tracks(album_id);
 CREATE INDEX IF NOT EXISTS idx_albums_artist ON albums(artist);
@@ -136,6 +149,11 @@ CREATE INDEX IF NOT EXISTS idx_albums_artist ON albums(artist);
 fn open(app: &AppHandle) -> Result<Connection, String> {
     let conn = Connection::open(db_path(app)?).map_err(|e| e.to_string())?;
     conn.execute_batch(SCHEMA).map_err(|e| e.to_string())?;
+    // Migrate DBs created before `playable` existed (next scan repopulates it).
+    let _ = conn.execute(
+        "ALTER TABLE tracks ADD COLUMN playable INTEGER NOT NULL DEFAULT 1",
+        [],
+    );
     Ok(conn)
 }
 
@@ -196,6 +214,7 @@ struct FileMeta {
     codec: Option<String>,
     sample_rate: Option<i64>,
     bit_depth: Option<i64>,
+    playable: bool,
 }
 
 fn parse_leading_int(s: &str) -> Option<i64> {
@@ -233,6 +252,7 @@ fn read_meta(path: &Path) -> FileMeta {
         codec: ext_upper(path),
         sample_rate: None,
         bit_depth: None,
+        playable: is_playable(path),
     };
 
     // Video files: don't probe with lofty (it's an audio tag reader).
@@ -558,8 +578,8 @@ fn scan_library(app: AppHandle) -> Result<ScanSummary, String> {
             for t in &a.tracks {
                 tx.execute(
                     "INSERT OR IGNORE INTO tracks
-                     (album_id, path, title, track_no, disc_no, duration, codec, sample_rate, bit_depth, is_video)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                     (album_id, path, title, track_no, disc_no, duration, codec, sample_rate, bit_depth, is_video, playable)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                     params![
                         album_id,
                         t.path.to_string_lossy(),
@@ -571,6 +591,7 @@ fn scan_library(app: AppHandle) -> Result<ScanSummary, String> {
                         t.sample_rate,
                         t.bit_depth,
                         t.is_video as i64,
+                        t.playable as i64,
                     ],
                 )
                 .map_err(|e| e.to_string())?;
@@ -678,6 +699,7 @@ struct TrackRow {
     sample_rate: Option<i64>,
     bit_depth: Option<i64>,
     is_video: bool,
+    playable: bool,
 }
 
 #[tauri::command]
@@ -686,27 +708,13 @@ fn list_album_tracks(app: AppHandle, album_id: i64) -> Result<Vec<TrackRow>, Str
     let mut stmt = conn
         .prepare(
             "SELECT id, album_id, path, title, track_no, disc_no, duration,
-                    codec, sample_rate, bit_depth, is_video
+                    codec, sample_rate, bit_depth, is_video, playable
              FROM tracks WHERE album_id = ?1
              ORDER BY disc_no, track_no, path COLLATE NOCASE",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
-        .query_map(params![album_id], |r| {
-            Ok(TrackRow {
-                id: r.get(0)?,
-                album_id: r.get(1)?,
-                path: r.get(2)?,
-                title: r.get(3)?,
-                track_no: r.get(4)?,
-                disc_no: r.get(5)?,
-                duration: r.get(6)?,
-                codec: r.get(7)?,
-                sample_rate: r.get(8)?,
-                bit_depth: r.get(9)?,
-                is_video: r.get::<_, i64>(10)? != 0,
-            })
-        })
+        .query_map(params![album_id], map_track_row)
         .map_err(|e| e.to_string())?;
     rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
 }
@@ -724,6 +732,7 @@ fn map_track_row(r: &rusqlite::Row) -> rusqlite::Result<TrackRow> {
         sample_rate: r.get(8)?,
         bit_depth: r.get(9)?,
         is_video: r.get::<_, i64>(10)? != 0,
+        playable: r.get::<_, i64>(11)? != 0,
     })
 }
 
@@ -739,7 +748,7 @@ fn tracks_by_paths(app: AppHandle, paths: Vec<String>) -> Result<Vec<TrackRow>, 
     let placeholders = vec!["?"; paths.len()].join(",");
     let sql = format!(
         "SELECT id, album_id, path, title, track_no, disc_no, duration, codec,
-                sample_rate, bit_depth, is_video
+                sample_rate, bit_depth, is_video, playable
          FROM tracks WHERE path IN ({placeholders})"
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
@@ -747,6 +756,31 @@ fn tracks_by_paths(app: AppHandle, paths: Vec<String>) -> Result<Vec<TrackRow>, 
         .query_map(rusqlite::params_from_iter(paths.iter()), map_track_row)
         .map_err(|e| e.to_string())?;
     rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LibraryStats {
+    tracks: i64,
+    /// Tracks whose format the audio backend can't decode (APE/WMA/etc.).
+    unplayable: i64,
+}
+
+/// Headline counts so the user can see what a scan brought in.
+#[tauri::command]
+fn library_stats(app: AppHandle) -> Result<LibraryStats, String> {
+    let conn = open(&app)?;
+    conn.query_row(
+        "SELECT COUNT(*), COALESCE(SUM(CASE WHEN playable = 0 THEN 1 ELSE 0 END), 0) FROM tracks",
+        [],
+        |r| {
+            Ok(LibraryStats {
+                tracks: r.get(0)?,
+                unplayable: r.get(1)?,
+            })
+        },
+    )
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -844,6 +878,7 @@ fn transcode_video_audio(src: &str, cache_dir: &Path) -> Result<PathBuf, String>
 fn spawn_audio_thread(
     rx: std::sync::mpsc::Receiver<AudioCmd>,
     shared: Arc<AudioShared>,
+    spec: Arc<SpectrumShared>,
     cache_dir: PathBuf,
 ) {
     use rodio::{Decoder, OutputStream, Sink, Source};
@@ -904,6 +939,8 @@ fn spawn_audio_thread(
                         Ok(dec) => {
                             let dur =
                                 dec.total_duration().map(|d| d.as_millis() as u64).unwrap_or(0);
+                            let channels = dec.channels();
+                            spec.sample_rate.store(dec.sample_rate(), Ordering::Relaxed);
                             sink.stop();
                             sink = match Sink::try_new(&handle) {
                                 Ok(s) => s,
@@ -914,7 +951,8 @@ fn spawn_audio_thread(
                             shared.position_ms.store(0, Ordering::Relaxed);
                             shared.finished.store(false, Ordering::Relaxed);
                             shared.error.store(false, Ordering::Relaxed);
-                            sink.append(dec);
+                            // Tap the stream for the Now-playing spectrum.
+                            sink.append(SpectrumTap::new(dec, spec.clone(), channels));
                             sink.play();
                             active = true;
                         }
@@ -1025,6 +1063,216 @@ fn audio_status(state: State<AudioState>) -> AudioStatus {
         finished: s.finished.swap(false, Ordering::Relaxed),
         error: s.error.swap(false, Ordering::Relaxed),
     }
+}
+
+// ---- spectrum analysis (Now-playing visualizer) --------------------------
+//
+// The webview can't analyse the audio: it plays through rodio in Rust (and
+// WebKit2GTK mutes Web Audio here anyway), so there's no signal on the page
+// to FFT. Instead a `SpectrumTap` Source sits in the rodio chain, mirroring
+// each decoded frame (downmixed to mono) into a ring buffer. A dedicated
+// thread runs a windowed FFT over the latest window ~30×/s, folds the
+// magnitudes into log-spaced bars, and the frontend polls `audio_spectrum`.
+
+const SPEC_WINDOW: usize = 2048; // FFT size (mono samples)
+const SPEC_BARS: usize = 28; // output bar count
+
+struct SpectrumRing {
+    buf: Vec<f32>,
+    pos: usize,
+}
+impl SpectrumRing {
+    fn new() -> Self {
+        Self {
+            buf: vec![0.0; SPEC_WINDOW],
+            pos: 0,
+        }
+    }
+    fn push(&mut self, s: f32) {
+        self.buf[self.pos] = s;
+        self.pos = (self.pos + 1) % SPEC_WINDOW;
+    }
+    /// Copy the window in chronological order (oldest → newest) into `out`.
+    fn snapshot(&self, out: &mut [f32]) {
+        let n = self.buf.len();
+        for (i, slot) in out.iter_mut().enumerate().take(n) {
+            *slot = self.buf[(self.pos + i) % n];
+        }
+    }
+}
+
+struct SpectrumShared {
+    ring: Mutex<SpectrumRing>,
+    /// Latest computed bar magnitudes (0..1); read by the frontend poll.
+    bars: Mutex<Vec<f32>>,
+    sample_rate: AtomicU32,
+    /// Monotonic count of mono samples written. The analysis thread watches
+    /// it to tell playing from paused/stopped and decay the bars to rest.
+    written: AtomicU64,
+}
+impl SpectrumShared {
+    fn new() -> Self {
+        Self {
+            ring: Mutex::new(SpectrumRing::new()),
+            bars: Mutex::new(vec![0.0; SPEC_BARS]),
+            sample_rate: AtomicU32::new(44_100),
+            written: AtomicU64::new(0),
+        }
+    }
+}
+
+/// A passthrough rodio `Source` that mirrors the samples it forwards (one
+/// mono value per frame) into the spectrum ring, flushed in small batches to
+/// keep lock traffic off the per-sample hot path.
+struct SpectrumTap<S> {
+    inner: S,
+    spec: Arc<SpectrumShared>,
+    channels: u16,
+    acc: f32,
+    ch_i: u16,
+    batch: Vec<f32>,
+}
+impl<S> SpectrumTap<S> {
+    fn new(inner: S, spec: Arc<SpectrumShared>, channels: u16) -> Self {
+        Self {
+            inner,
+            spec,
+            channels: channels.max(1),
+            acc: 0.0,
+            ch_i: 0,
+            batch: Vec::with_capacity(256),
+        }
+    }
+    fn flush(&mut self) {
+        if self.batch.is_empty() {
+            return;
+        }
+        if let Ok(mut ring) = self.spec.ring.lock() {
+            for &s in &self.batch {
+                ring.push(s);
+            }
+        }
+        self.spec
+            .written
+            .fetch_add(self.batch.len() as u64, Ordering::Relaxed);
+        self.batch.clear();
+    }
+}
+impl<S: Iterator<Item = i16>> Iterator for SpectrumTap<S> {
+    type Item = i16;
+    fn next(&mut self) -> Option<i16> {
+        let s = self.inner.next();
+        match s {
+            Some(v) => {
+                self.acc += v as f32 / 32_768.0;
+                self.ch_i += 1;
+                if self.ch_i >= self.channels {
+                    self.batch.push(self.acc / self.channels as f32);
+                    self.acc = 0.0;
+                    self.ch_i = 0;
+                    if self.batch.len() >= 256 {
+                        self.flush();
+                    }
+                }
+            }
+            None => self.flush(),
+        }
+        s
+    }
+}
+impl<S: rodio::Source<Item = i16>> rodio::Source for SpectrumTap<S> {
+    fn current_frame_len(&self) -> Option<usize> {
+        self.inner.current_frame_len()
+    }
+    fn channels(&self) -> u16 {
+        self.inner.channels()
+    }
+    fn sample_rate(&self) -> u32 {
+        self.inner.sample_rate()
+    }
+    fn total_duration(&self) -> Option<std::time::Duration> {
+        self.inner.total_duration()
+    }
+    fn try_seek(&mut self, pos: std::time::Duration) -> Result<(), rodio::source::SeekError> {
+        self.inner.try_seek(pos)
+    }
+}
+
+fn spawn_spectrum_thread(spec: Arc<SpectrumShared>) {
+    use rustfft::{num_complex::Complex, FftPlanner};
+    use std::time::Duration;
+
+    std::thread::spawn(move || {
+        let fft = FftPlanner::<f32>::new().plan_fft_forward(SPEC_WINDOW);
+        // Hann window to tame spectral leakage.
+        let hann: Vec<f32> = (0..SPEC_WINDOW)
+            .map(|i| {
+                let x = std::f32::consts::PI * i as f32 / (SPEC_WINDOW as f32 - 1.0);
+                x.sin().powi(2)
+            })
+            .collect();
+        let mut scratch = vec![0.0f32; SPEC_WINDOW];
+        let mut buf = vec![Complex::<f32>::new(0.0, 0.0); SPEC_WINDOW];
+        let mut bars = vec![0.0f32; SPEC_BARS];
+        let mut last_written = 0u64;
+        let nyq = SPEC_WINDOW / 2;
+
+        loop {
+            std::thread::sleep(Duration::from_millis(33)); // ~30fps
+            let written = spec.written.load(Ordering::Relaxed);
+            let advancing = written != last_written;
+            last_written = written;
+
+            if advancing {
+                if let Ok(ring) = spec.ring.lock() {
+                    ring.snapshot(&mut scratch);
+                }
+                let sr = spec.sample_rate.load(Ordering::Relaxed).max(8_000) as f32;
+                for i in 0..SPEC_WINDOW {
+                    buf[i] = Complex::new(scratch[i] * hann[i], 0.0);
+                }
+                fft.process(&mut buf);
+
+                // Fold magnitudes into log-spaced bars across ~40Hz..16kHz.
+                let fmin = 40.0f32;
+                let fmax = (sr / 2.0).min(16_000.0);
+                for (b, bar) in bars.iter_mut().enumerate() {
+                    let f0 = fmin * (fmax / fmin).powf(b as f32 / SPEC_BARS as f32);
+                    let f1 = fmin * (fmax / fmin).powf((b + 1) as f32 / SPEC_BARS as f32);
+                    let k0 = ((f0 / sr * SPEC_WINDOW as f32) as usize).min(nyq);
+                    let k1 = (((f1 / sr * SPEC_WINDOW as f32) as usize).max(k0 + 1)).min(nyq);
+                    let mut sum = 0.0f32;
+                    for c in &buf[k0..k1] {
+                        sum += c.norm();
+                    }
+                    let mag = sum / ((k1 - k0) as f32) / (SPEC_WINDOW as f32 * 0.5);
+                    // dB scale, mapped from a -60..0 dB floor into 0..1.
+                    let db = 20.0 * (mag + 1e-6).log10();
+                    let norm = ((db + 60.0) / 60.0).clamp(0.0, 1.0);
+                    // Fast attack, slow decay reads as lively but not jittery.
+                    if norm > *bar {
+                        *bar = norm;
+                    } else {
+                        *bar += (norm - *bar) * 0.35;
+                    }
+                }
+            } else {
+                // Paused / stopped — let the bars settle to rest.
+                for bar in bars.iter_mut() {
+                    *bar *= 0.85;
+                }
+            }
+
+            if let Ok(mut out) = spec.bars.lock() {
+                out.clone_from_slice(&bars);
+            }
+        }
+    });
+}
+
+#[tauri::command]
+fn audio_spectrum(spec: State<Arc<SpectrumShared>>) -> Vec<f32> {
+    spec.bars.lock().map(|b| b.clone()).unwrap_or_default()
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1193,11 +1441,14 @@ pub fn run() {
             let _ = fs::create_dir_all(&cache);
             let (tx, rx) = std::sync::mpsc::channel::<AudioCmd>();
             let shared = Arc::new(AudioShared::default());
-            spawn_audio_thread(rx, shared.clone(), cache);
+            let spectrum = Arc::new(SpectrumShared::new());
+            spawn_audio_thread(rx, shared.clone(), spectrum.clone(), cache);
+            spawn_spectrum_thread(spectrum.clone());
             app.manage(AudioState {
                 tx: Mutex::new(tx),
                 shared,
             });
+            app.manage(spectrum);
 
             // Loopback server for webview <video> playback of local media.
             let media_port = spawn_media_server()?;
@@ -1213,6 +1464,7 @@ pub fn run() {
             list_albums,
             list_album_tracks,
             tracks_by_paths,
+            library_stats,
             read_text_file,
             write_text_file,
             default_playlist_dir,
@@ -1224,6 +1476,7 @@ pub fn run() {
             audio_seek,
             audio_set_volume,
             audio_status,
+            audio_spectrum,
             media_base
         ])
         .run(tauri::generate_context!())

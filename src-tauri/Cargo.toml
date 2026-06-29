@@ -39,3 +39,7 @@ rodio = { version = "0.19", default-features = false, features = ["symphonia-all
 # schemes (asset:// → MediaError 4) but plays it fine over http://localhost.
 tiny_http = "0.12"
 percent-encoding = "2"
+# Real-time spectrum for the Now-playing visualizer. Audio is decoded in Rust
+# (rodio, outside the webview where Web Audio is muted), so the FFT is tapped
+# off the rodio sample stream and the bars are polled by the frontend.
+rustfft = "6"

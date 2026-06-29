@@ -7,7 +7,7 @@ interface PlaylistProps {
   tracks: Track[];
   albumById: Map<number, Album>;
   currentTrackId: number | null;
-  /** Play the playlist starting at this index (loads it into the queue). */
+  /** Start playback at this index within the playlist. */
   onPlayAt: (index: number) => void;
   onRemove: (index: number) => void;
   onClear: () => void;
@@ -77,6 +77,7 @@ export function Playlist({
           {tracks.map((t, i) => {
             const active = t.id === currentTrackId;
             const artist = albumById.get(t.albumId)?.artist ?? "";
+            const unplayable = t.playable === false;
             return (
               <div
                 key={`${t.id}-${i}`}
@@ -84,6 +85,11 @@ export function Playlist({
                   "group flex items-center gap-2 px-2 py-1 rounded hover:bg-surface/50 text-[13px]",
                   active && "bg-surface/70",
                 )}
+                title={
+                  unplayable
+                    ? `${t.codec ?? "This format"} can't be decoded — will be skipped`
+                    : undefined
+                }
               >
                 <div
                   onDoubleClick={() => onPlayAt(i)}
@@ -94,12 +100,25 @@ export function Playlist({
                     {i + 1}
                   </span>
                   <span className="truncate min-w-0">
-                    <span className={active ? "text-accent" : "text-fg/80"}>
+                    <span
+                      className={cn(
+                        unplayable
+                          ? "text-muted/50 line-through decoration-muted/30"
+                          : active
+                            ? "text-accent"
+                            : "text-fg/80",
+                      )}
+                    >
                       {t.title}
                     </span>
                     {artist && <span className="text-muted"> · {artist}</span>}
                   </span>
                 </div>
+                {unplayable && (
+                  <span className="shrink-0 text-[9px] font-medium tracking-wide text-auburn border border-auburn/40 rounded px-1 leading-tight">
+                    {t.codec ?? "?"}
+                  </span>
+                )}
                 {t.duration != null && (
                   <span className="text-[11px] text-muted tabular-nums shrink-0">
                     {formatTime(t.duration)}
