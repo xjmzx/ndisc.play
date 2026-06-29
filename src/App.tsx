@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import {
@@ -327,32 +327,39 @@ export default function App() {
   // Play a fresh selection (e.g. an album from the Collection): it replaces
   // the playlist and starts at `startIndex`. The `＋` buttons are the
   // non-destructive path (append without disturbing what's playing).
-  function play(tracks: Track[], startIndex: number) {
+  // These handlers are passed to the memoized Collection/Playlist panels, so
+  // they're useCallback-stable — otherwise a new identity each render would
+  // defeat the memo and re-render those panels on every position tick.
+  const play = useCallback((tracks: Track[], startIndex: number) => {
     if (!tracks.length) return;
     setPlaylist(tracks);
     setIndex(Math.max(0, Math.min(startIndex, tracks.length - 1)));
-  }
+  }, []);
 
   // --- playlist (the live play queue) --------------------------------------
-  function addToPlaylist(tracks: Track[]) {
+  const addToPlaylist = useCallback((tracks: Track[]) => {
     setPlaylist((p) => [...p, ...tracks]);
-  }
-  function playPlaylistAt(i: number) {
-    if (playlist.length) setIndex(Math.max(0, Math.min(i, playlist.length - 1)));
-  }
-  function removeFromPlaylist(i: number) {
+  }, []);
+  const playPlaylistAt = useCallback(
+    (i: number) => {
+      if (playlist.length)
+        setIndex(Math.max(0, Math.min(i, playlist.length - 1)));
+    },
+    [playlist.length],
+  );
+  const removeFromPlaylist = useCallback((i: number) => {
     setPlaylist((p) => p.filter((_, j) => j !== i));
     // Keep the highlight on the same track: a removal before it shifts it
     // down by one; removing it or a later one leaves the index (a removed
     // current lets the next track slide into the slot).
     setIndex((idx) => (i < idx ? idx - 1 : idx));
-  }
-  function clearPlaylist() {
+  }, []);
+  const clearPlaylist = useCallback(() => {
     setPlaylist([]);
     setIndex(-1);
     audioStop().catch(() => {});
     if (videoElRef.current) videoElRef.current.pause();
-  }
+  }, []);
 
   // Auto-persist the working playlist by path, and restore it on launch
   // (resolving paths back to fresh library tracks). `hydrated` gates the
@@ -410,7 +417,7 @@ export default function App() {
   }
 
   // Import a Strawberry/XSPF playlist into the working list.
-  async function loadPlaylistFile() {
+  const loadPlaylistFile = useCallback(async () => {
     const picked = await open({
       defaultPath: playlistDir ?? undefined,
       filters: [{ name: "XSPF playlist", extensions: ["xspf"] }],
@@ -422,10 +429,10 @@ export default function App() {
     } catch (e) {
       console.error("playlist load failed", e);
     }
-  }
+  }, [playlistDir]);
 
   // Export the working list as an .xspf (Strawberry-compatible).
-  async function savePlaylistFile() {
+  const savePlaylistFile = useCallback(async () => {
     if (!playlist.length) return;
     const dest = await save({
       defaultPath: `${playlistDir ? playlistDir + "/" : ""}nplay.xspf`,
@@ -443,7 +450,7 @@ export default function App() {
     } catch (e) {
       console.error("playlist save failed", e);
     }
-  }
+  }, [playlist, playlistDir, albumById]);
 
   function toggle() {
     if (!current) return;

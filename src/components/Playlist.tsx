@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { FolderOpen, Play, Save, Trash2, X } from "lucide-react";
 import { cn } from "../lib/cn";
 import { formatTime } from "../lib/format";
@@ -17,7 +18,11 @@ interface PlaylistProps {
   onSave: () => void;
 }
 
-export function Playlist({
+// Memoized so the app's 250ms position tick doesn't reconcile the list (its
+// props are stable between ticks — only the footer needs the tick).
+export const Playlist = memo(PlaylistImpl);
+
+function PlaylistImpl({
   tracks,
   albumById,
   currentTrackId,

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -37,7 +37,12 @@ interface ArtistGroup {
   albums: Album[];
 }
 
-export function LibraryTree({
+// Memoized: the Collection is the heaviest panel; keeping it out of the app's
+// 250ms position-tick re-render (its props are referentially stable between
+// ticks) is the main reason the transport poll no longer reconciles the tree.
+export const LibraryTree = memo(LibraryTreeImpl);
+
+function LibraryTreeImpl({
   albums,
   currentTrackId,
   onPlay,
