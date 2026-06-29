@@ -40,6 +40,7 @@ jobs:
             librsvg2-dev \
             libxdo-dev \
             libssl-dev \
+            libasound2-dev \
             build-essential \
             curl wget file
 
