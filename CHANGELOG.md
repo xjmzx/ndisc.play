@@ -5,6 +5,25 @@ siblings (ndisc / ndisc.view / glmps), nplay is a local player and **not** a
 participant in the ndisc Nostr wire contract, so it tracks a single axis: this
 app's own semver, below.
 
+## 0.1.0-beta.2 — unreleased
+
+### Keyboard — 2026-06-30
+- **Spacebar toggles play/pause** app-wide — ignored while typing in a field
+  (the Collection / table filters, inline tag-edit cells) and on key-repeat or
+  modifier combos.
+
+### Library table view
+- A flat, sortable, **virtualized** Tracks table (header view toggle) — the
+  hierarchically-flat counterpart to the Collection. In-table filter over
+  artist/album/title; double-click a row to play; inline tag-editing of title
+  and track # written back to the file via lofty.
+
+### Performance
+- The spectrum animates only while playing (+ a Rust FFT idle back-off); the
+  250ms transport poll no longer re-renders the Collection/Playlist (those
+  panels are memoized — only the footer updates per tick); the table renders
+  only its visible rows.
+
 ## 0.1.0-beta.1 — 2026-06-29
 
 ### Header version chip — 2026-06-29
@@ -105,13 +124,9 @@ app's own semver, below.
 ## Roadmap
 
 ### Next (v0.1.0-beta.2)
-- **Spacebar play/pause** — global transport shortcut (ignored while typing in
-  the filter/search field).
-- **Library "view" mode** — a full-library table view (à la ndisc's batch-edit
-  view) reachable from header view-buttons; match the sibling apps' header
-  view-toggle layout.
 - **Further video / Video-section work** — beyond the current mp4 loopback
   playback.
+- (done: spacebar play/pause; the flat sortable library table view.)
 
 ### Later
 - **Library video normalization** — a batch "Normalize videos" op in **ntree**

@@ -471,6 +471,32 @@ export default function App() {
     }
   }
 
+  // Spacebar = play/pause, app-wide — but never while typing in a field (the
+  // Collection / table filters, inline tag-edit cells). Held in a ref so the
+  // mount-once listener always calls the latest toggle.
+  const toggleRef = useRef(toggle);
+  toggleRef.current = toggle;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code !== "Space" && e.key !== " ") return;
+      if (e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
+      const el = e.target as HTMLElement | null;
+      const tag = el?.tagName;
+      if (
+        tag === "INPUT" ||
+        tag === "TEXTAREA" ||
+        tag === "SELECT" ||
+        el?.isContentEditable
+      )
+        return;
+      // Stop the page scroll and any focused-button Space activation.
+      e.preventDefault();
+      toggleRef.current();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   function prev() {
     const restart = () => {
       if (currentIsMp4) {
