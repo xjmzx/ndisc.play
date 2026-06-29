@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, Pencil } from "lucide-react";
 import { cn } from "../lib/cn";
 import { formatTime } from "../lib/format";
@@ -47,9 +47,11 @@ const COLUMNS: Column[] = [
 const GRID =
   "grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)_2.5rem_minmax(0,1.4fr)_3.5rem_4rem_3.5rem_2rem]";
 
-// Rendered-row cap (sorted first) so a large library stays responsive without
-// virtualization; overflow is surfaced in the toolbar, never silently dropped.
-const MAX_ROWS = 2000;
+// Row virtualization: only the visible slice (+ overscan) is in the DOM, so
+// the full library scrolls smoothly with no row cap. ROW_H must match the
+// rendered row height (box-border, so the 1px border is included).
+const ROW_H = 26;
+const OVERSCAN = 8;
 
 function val(t: FlatTrack, key: SortKey): string | number | null | undefined {
   if (key === "playable") return t.playable ? 1 : 0;
@@ -106,8 +108,33 @@ export function TableView({
     return [...rows].sort((a, b) => compare(a, b, sortKey, sortDir, numeric));
   }, [rows, sortKey, sortDir]);
 
-  const shown = sorted.slice(0, MAX_ROWS);
-  const overflow = sorted.length - shown.length;
+  // --- virtualization ---
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportH, setViewportH] = useState(0);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const measure = () => setViewportH(el.clientHeight);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // Reset to the top when the sort or the underlying data changes.
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
+    setScrollTop(0);
+  }, [sortKey, sortDir, rows]);
+
+  const total = sorted.length;
+  const start = Math.max(0, Math.floor(scrollTop / ROW_H) - OVERSCAN);
+  const end = Math.min(total, start + Math.ceil(viewportH / ROW_H) + OVERSCAN * 2);
+  const slice = sorted.slice(start, end);
+  const padTop = start * ROW_H;
+  const padBottom = (total - end) * ROW_H;
 
   function toggleSort(key: SortKey) {
     if (key === sortKey) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
@@ -122,12 +149,6 @@ export function TableView({
       <div className="flex items-center gap-3 px-4 py-1.5 shrink-0 border-b border-surface/60 text-xs">
         <span className="text-muted">
           {loading ? "loading…" : `${rows.length} tracks`}
-          {overflow > 0 && (
-            <span className="ml-3 text-auburn">
-              showing {MAX_ROWS} of {rows.length} (sorted) — narrow to see the
-              rest
-            </span>
-          )}
           <span className="ml-3 text-muted/60">double-click a row to play</span>
         </span>
       </div>
@@ -161,29 +182,36 @@ export function TableView({
         ))}
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto [scrollbar-gutter:stable]">
+      <div
+        ref={scrollRef}
+        onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
+        className="flex-1 min-h-0 overflow-y-auto [scrollbar-gutter:stable]"
+      >
         {loading ? (
           <div className="px-4 py-6 text-sm text-muted">loading…</div>
-        ) : shown.length === 0 ? (
+        ) : total === 0 ? (
           <div className="px-4 py-6 text-sm text-muted">
             No tracks — scan a library to get started.
           </div>
         ) : (
-          shown.map((t, i) => {
-            const active = t.id === currentTrackId;
-            const unplayable = t.playable === false;
-            return (
-              <div
-                key={t.id}
-                onDoubleClick={() => onPlay(sorted, i)}
-                title={unplayable ? `${t.codec ?? "format"} can't be decoded` : undefined}
-                className={cn(
-                  "grid items-center gap-3 px-4 py-1 font-mono text-xs select-none cursor-default",
-                  "border-b border-fg/15 hover:bg-surface/30 transition-colors",
-                  active && "bg-surface/70",
-                  GRID,
-                )}
-              >
+          <>
+            <div style={{ height: padTop }} />
+            {slice.map((t, i) => {
+              const active = t.id === currentTrackId;
+              const unplayable = t.playable === false;
+              return (
+                <div
+                  key={t.id}
+                  onDoubleClick={() => onPlay(sorted, start + i)}
+                  style={{ height: ROW_H }}
+                  title={unplayable ? `${t.codec ?? "format"} can't be decoded` : undefined}
+                  className={cn(
+                    "grid items-center gap-3 px-4 font-mono text-xs select-none cursor-default",
+                    "border-b border-fg/15 hover:bg-surface/30 transition-colors",
+                    active && "bg-surface/70",
+                    GRID,
+                  )}
+                >
                 {COLUMNS.map((c) => {
                   if (c.key === "playable") {
                     return (
@@ -260,7 +288,9 @@ export function TableView({
                 })}
               </div>
             );
-          })
+            })}
+            <div style={{ height: padBottom }} />
+          </>
         )}
       </div>
     </div>
