@@ -104,9 +104,21 @@ app's own semver, below.
 
 ## Roadmap
 
+### Next (v0.1.0-beta.2)
+- **Spacebar play/pause** — global transport shortcut (ignored while typing in
+  the filter/search field).
+- **Library "view" mode** — a full-library table view (à la ndisc's batch-edit
+  view) reachable from header view-buttons; match the sibling apps' header
+  view-toggle layout.
+- **Further video / Video-section work** — beyond the current mp4 loopback
+  playback.
+
+### Later
 - **Library video normalization** — a batch "Normalize videos" op in **ntree**
   to remux/transcode legacy library videos (mpg/avi/mov, non-faststart mp4) to
   playable H.264/AAC faststart mp4, so nplay plays the whole set with picture.
 - BPM display (aubio, ported from the smpl detector).
 - Responsive auto-collapse of panels at narrow widths.
 - Playlist reorder (drag / up-down).
+- "Verify library" decode-probe pass (catch corrupt files of a supported
+  format that the scan-time format check can't flag).
