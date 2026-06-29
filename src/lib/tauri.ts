@@ -36,6 +36,13 @@ export interface LibraryStats {
   unplayable: number;
 }
 
+/** A track joined with its album — one flat row for the sortable table view. */
+export interface FlatTrack extends Track {
+  artist: string;
+  album: string;
+  year: number | null;
+}
+
 export interface ScanSummary {
   albums: number;
   tracks: number;
@@ -78,6 +85,22 @@ export function tracksByPaths(paths: string[]): Promise<Track[]> {
 /** Headline library counts (total tracks + how many can't be decoded). */
 export function libraryStats(): Promise<LibraryStats> {
   return invoke("library_stats");
+}
+
+/** Every track in the library, flat (joined with album), for the table view. */
+export function listAllTracks(): Promise<FlatTrack[]> {
+  return invoke("list_all_tracks");
+}
+
+/** Write one editable tag field (`title` | `trackNo`) back to a track's file
+ *  and mirror it into the DB. `value` null clears it (trackNo only). */
+export function setTrackField(
+  id: number,
+  path: string,
+  field: "title" | "trackNo",
+  value: string | null,
+): Promise<void> {
+  return invoke("set_track_field", { id, path, field, value });
 }
 
 export function readTextFile(path: string): Promise<string> {

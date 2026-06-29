@@ -18,6 +18,7 @@ import {
   Shuffle,
   SkipBack,
   SkipForward,
+  Table,
 } from "lucide-react";
 import { cn } from "./lib/cn";
 import { Section } from "./components/Section";
@@ -28,6 +29,7 @@ import { PlayerBar } from "./components/PlayerBar";
 import { Playlist } from "./components/Playlist";
 import { ScanProgressBar } from "./components/ScanProgressBar";
 import { Spectrum } from "./components/Spectrum";
+import { TableView } from "./components/TableView";
 import { Video } from "./components/Video";
 import {
   audioPause,
@@ -136,6 +138,10 @@ export default function App() {
   const [mediaBaseUrl, setMediaBaseUrl] = useState("");
   const [albums, setAlbums] = useState<Album[]>([]);
   const [stats, setStats] = useState<LibraryStats | null>(null);
+  // Main work area: the column layout, or the flat sortable table view.
+  const [view, setView] = useState<"library" | "table">("library");
+  // Bumped on each library refresh so the table view reloads after a scan.
+  const [libVersion, setLibVersion] = useState(0);
   const [loadingAlbums, setLoadingAlbums] = useState(true);
   const [scanning, setScanning] = useState(false);
   const [progress, setProgress] = useState<ScanProgress | null>(null);
@@ -190,6 +196,7 @@ export default function App() {
     setLoadingAlbums(true);
     try {
       setAlbums(await listAlbums());
+      setLibVersion((v) => v + 1);
       libraryStats()
         .then(setStats)
         .catch(() => {});
@@ -680,6 +687,16 @@ export default function App() {
         </div>
 
         <div className="flex items-center gap-3 shrink-0 justify-self-end">
+          {/* Flat sortable table view toggle. */}
+          <button
+            onClick={() => setView((v) => (v === "table" ? "library" : "table"))}
+            title={view === "table" ? "Back to library" : "Flat sortable track table"}
+            aria-label="Table view"
+            aria-pressed={view === "table"}
+            className={modeBtn(view === "table")}
+          >
+            <Table size={15} />
+          </button>
           {/* Permanent scan meter — muted track at rest, accent fill on scan. */}
           <ScanProgressBar progress={progress} active={scanning} />
           <span className="text-[12px] text-muted whitespace-nowrap">
@@ -714,7 +731,17 @@ export default function App() {
         </div>
       </header>
 
-      {/* Main — Collection · Playlist · (Now playing + Spectrum) · Video */}
+      {/* Main — Collection · Playlist · (Now playing + Spectrum) · Video,
+          or the flat sortable table view. */}
+      {view === "table" ? (
+        <div className="flex-1 min-h-0 p-3">
+          <TableView
+            reloadKey={libVersion}
+            currentTrackId={current?.id ?? null}
+            onPlay={play}
+          />
+        </div>
+      ) : (
       <div
         className="flex-1 min-h-0 grid gap-3 p-3"
         style={{ gridTemplateColumns: mainCols }}
@@ -883,6 +910,7 @@ export default function App() {
           </Section>
         )}
       </div>
+      )}
 
       {/* Footer — now playing, seek, volume (transport is in the header) */}
       <PlayerBar

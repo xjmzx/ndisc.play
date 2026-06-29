@@ -758,6 +758,154 @@ fn tracks_by_paths(app: AppHandle, paths: Vec<String>) -> Result<Vec<TrackRow>, 
     rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
 }
 
+// A track joined with its album's artist/album/year — the flat row the
+// sortable table view consumes (one row per track across the whole library).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FlatTrackRow {
+    id: i64,
+    album_id: i64,
+    artist: String,
+    album: String,
+    year: Option<i64>,
+    path: String,
+    title: String,
+    track_no: Option<i64>,
+    disc_no: Option<i64>,
+    duration: Option<f64>,
+    codec: Option<String>,
+    sample_rate: Option<i64>,
+    bit_depth: Option<i64>,
+    is_video: bool,
+    playable: bool,
+}
+
+/// Every track in the library, flat, joined with its album. Powers the
+/// sortable table view (the hierarchically-flat counterpart to the tree).
+#[tauri::command]
+fn list_all_tracks(app: AppHandle) -> Result<Vec<FlatTrackRow>, String> {
+    let conn = open(&app)?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT t.id, t.album_id, a.artist, a.album, a.year, t.path, t.title,
+                    t.track_no, t.disc_no, t.duration, t.codec, t.sample_rate,
+                    t.bit_depth, t.is_video, t.playable
+             FROM tracks t JOIN albums a ON a.id = t.album_id
+             ORDER BY a.artist COLLATE NOCASE, a.year, a.album COLLATE NOCASE,
+                      t.disc_no, t.track_no, t.path COLLATE NOCASE",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(FlatTrackRow {
+                id: r.get(0)?,
+                album_id: r.get(1)?,
+                artist: r.get(2)?,
+                album: r.get(3)?,
+                year: r.get(4)?,
+                path: r.get(5)?,
+                title: r.get(6)?,
+                track_no: r.get(7)?,
+                disc_no: r.get(8)?,
+                duration: r.get(9)?,
+                codec: r.get(10)?,
+                sample_rate: r.get(11)?,
+                bit_depth: r.get(12)?,
+                is_video: r.get::<_, i64>(13)? != 0,
+                playable: r.get::<_, i64>(14)? != 0,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+}
+
+/// Write one editable tag field back to a track's file (lofty) and mirror it
+/// into the DB so the change survives without a rescan. Only per-track tag
+/// fields are accepted — `title` and `trackNo`; artist/album/year are
+/// album-shared (grouping keys) and are not editable per-track here. A `null`
+/// value clears the field (only meaningful for trackNo; an empty title is
+/// rejected). The file write is in-place — the only field that can fail mid-way
+/// is the tag save, which lofty does atomically per its WriteOptions.
+#[tauri::command]
+fn set_track_field(
+    app: AppHandle,
+    id: i64,
+    path: String,
+    field: String,
+    value: Option<String>,
+) -> Result<(), String> {
+    use lofty::config::WriteOptions;
+    use lofty::tag::{Accessor, Tag, TagExt};
+
+    let p = Path::new(&path);
+    if !p.is_file() {
+        return Err("file not found".into());
+    }
+    let mut tagged = lofty::read_from_path(p).map_err(|e| e.to_string())?;
+    if tagged.primary_tag().is_none() {
+        let tt = tagged.primary_tag_type();
+        tagged.insert_tag(Tag::new(tt));
+    }
+    let tag = tagged
+        .primary_tag_mut()
+        .ok_or_else(|| "no writable tag for this format".to_string())?;
+
+    // Apply to the in-memory tag, and decide the mirrored DB update.
+    let db_track_no: Option<i64>;
+    let db_title: Option<String>;
+    match field.as_str() {
+        "title" => {
+            let v = value.unwrap_or_default().trim().to_string();
+            if v.is_empty() {
+                return Err("title cannot be empty".into());
+            }
+            tag.set_title(v.clone());
+            db_title = Some(v);
+            db_track_no = None;
+        }
+        "trackNo" => {
+            match value.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                Some(s) => {
+                    let n: u32 = s
+                        .parse()
+                        .map_err(|_| "track number must be a positive integer".to_string())?;
+                    tag.set_track(n);
+                    db_track_no = Some(i64::from(n));
+                }
+                None => {
+                    tag.remove_track();
+                    db_track_no = None;
+                }
+            }
+            db_title = None;
+        }
+        other => return Err(format!("field not editable: {other}")),
+    }
+
+    tag.save_to_path(p, WriteOptions::default())
+        .map_err(|e| e.to_string())?;
+
+    let conn = open(&app)?;
+    match field.as_str() {
+        "title" => {
+            conn.execute(
+                "UPDATE tracks SET title = ?1 WHERE id = ?2",
+                params![db_title, id],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        "trackNo" => {
+            conn.execute(
+                "UPDATE tracks SET track_no = ?1 WHERE id = ?2",
+                params![db_track_no, id],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct LibraryStats {
@@ -1465,6 +1613,8 @@ pub fn run() {
             list_album_tracks,
             tracks_by_paths,
             library_stats,
+            list_all_tracks,
+            set_track_field,
             read_text_file,
             write_text_file,
             default_playlist_dir,
