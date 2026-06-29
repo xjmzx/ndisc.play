@@ -125,11 +125,18 @@ export function TableView({
   const scrollRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportH, setViewportH] = useState(0);
+  // Scrollbar gutter width (0 for overlay scrollbars, ~15px for classic) — used
+  // to pad the header's right edge so its columns line up with the body, which
+  // reserves the gutter via scrollbar-gutter:stable.
+  const [gutter, setGutter] = useState(0);
 
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const measure = () => setViewportH(el.clientHeight);
+    const measure = () => {
+      setViewportH(el.clientHeight);
+      setGutter(el.offsetWidth - el.clientWidth);
+    };
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(el);
@@ -183,6 +190,9 @@ export function TableView({
       </div>
 
       <div
+        // Match the body's reserved scrollbar gutter (px-4 left + 16 + gutter
+        // right) so the header columns line up with the rows.
+        style={{ paddingRight: gutter + 16 }}
         className={cn(
           "grid items-center gap-3 px-4 py-2 shrink-0 border-b border-surface/60",
           "bg-panel sticky top-0 z-10 text-xs uppercase tracking-wide text-accent font-medium",
