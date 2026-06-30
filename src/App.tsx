@@ -5,12 +5,14 @@ import {
   AudioLines,
   Film,
   FolderOpen,
+  LayoutGrid,
   ListMusic,
   ListPlus,
   Loader2,
   Music,
   Pause,
   Play,
+  Radio,
   RefreshCw,
   Repeat,
   Repeat1,
@@ -23,6 +25,7 @@ import {
 import { cn } from "./lib/cn";
 import { Section } from "./components/Section";
 import { CollapsedStrip } from "./components/CollapsedStrip";
+import { CurrentView } from "./components/CurrentView";
 import { LibraryTree, type SortKey } from "./components/LibraryTree";
 import { NowPlaying } from "./components/NowPlaying";
 import { PlayerBar } from "./components/PlayerBar";
@@ -139,7 +142,9 @@ export default function App() {
   const [albums, setAlbums] = useState<Album[]>([]);
   const [stats, setStats] = useState<LibraryStats | null>(null);
   // Main work area: the column layout, or the flat sortable table view.
-  const [view, setView] = useState<"library" | "table">("library");
+  const [view, setView] = useState<"library" | "table" | "current">(
+    "library",
+  );
   // Bumped on each library refresh so the table view reloads after a scan.
   const [libVersion, setLibVersion] = useState(0);
   const [loadingAlbums, setLoadingAlbums] = useState(true);
@@ -644,8 +649,9 @@ export default function App() {
       <header className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 px-4 py-2.5 border-b border-surface/60 bg-panel/60">
         <div className="flex items-center gap-3 min-w-0">
           <Music size={18} className="text-accent shrink-0" />
-          <h1 className="text-sm font-semibold tracking-wide shrink-0">
-            ndisc<span className="text-muted">.play</span>
+          <h1 className="text-2xl font-bold tracking-tight leading-none shrink-0">
+            <span className="text-accent">n</span>
+            <span className="text-mauve">play</span>
           </h1>
           {appVersion && (
             <span className="hidden md:inline-flex items-center px-2 py-1 rounded-md bg-surface text-mauve font-mono text-[11px] shrink-0">
@@ -723,16 +729,6 @@ export default function App() {
         </div>
 
         <div className="flex items-center gap-3 shrink-0 justify-self-end">
-          {/* Flat sortable table view toggle. */}
-          <button
-            onClick={() => setView((v) => (v === "table" ? "library" : "table"))}
-            title={view === "table" ? "Back to library" : "Flat sortable track table"}
-            aria-label="Table view"
-            aria-pressed={view === "table"}
-            className={modeBtn(view === "table")}
-          >
-            <Table size={15} />
-          </button>
           {/* Permanent scan meter — muted track at rest, accent fill on scan. */}
           <ScanProgressBar progress={progress} active={scanning} />
           <span className="text-[12px] text-muted whitespace-nowrap">
@@ -764,6 +760,38 @@ export default function App() {
             )}
             {scanning ? "Scanning" : "Scan"}
           </button>
+          {/* View-switch cluster — Player · Table · Current, at the right end
+              of the header (matches where ndisc's view buttons sit). */}
+          <span className="w-px h-6 bg-surface shrink-0" aria-hidden="true" />
+          <div className="inline-flex gap-1">
+            <button
+              onClick={() => setView("library")}
+              title="Player"
+              aria-label="Player"
+              aria-pressed={view === "library"}
+              className={modeBtn(view === "library")}
+            >
+              <LayoutGrid size={15} />
+            </button>
+            <button
+              onClick={() => setView("table")}
+              title="Track table"
+              aria-label="Track table"
+              aria-pressed={view === "table"}
+              className={modeBtn(view === "table")}
+            >
+              <Table size={15} />
+            </button>
+            <button
+              onClick={() => setView("current")}
+              title="Current — release feed channel"
+              aria-label="Current"
+              aria-pressed={view === "current"}
+              className={modeBtn(view === "current")}
+            >
+              <Radio size={15} />
+            </button>
+          </div>
         </div>
       </header>
 
@@ -776,6 +804,10 @@ export default function App() {
             currentTrackId={current?.id ?? null}
             onPlay={play}
           />
+        </div>
+      ) : view === "current" ? (
+        <div className="flex-1 min-h-0 p-3">
+          <CurrentView active={view === "current"} />
         </div>
       ) : (
       <div
