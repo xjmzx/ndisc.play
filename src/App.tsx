@@ -646,7 +646,7 @@ export default function App() {
   return (
     <div className="h-full flex flex-col bg-bg text-fg">
       {/* Header — [ title + folder ] [ master transport ] [ scan ] */}
-      <header className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 px-4 py-2.5 border-b border-surface/60 bg-panel/60">
+      <header className="grid grid-cols-[1fr_auto_1fr] items-center gap-4 px-4 py-3 border-b border-surface/60 bg-panel/60">
         <div className="flex items-center gap-3 min-w-0">
           <Music size={18} className="text-accent shrink-0" />
           <h1 className="text-2xl font-bold tracking-tight leading-none shrink-0">
@@ -798,7 +798,7 @@ export default function App() {
       {/* Main — Collection · Playlist · (Now playing + Spectrum) · Video,
           or the flat sortable table view. */}
       {view === "table" ? (
-        <div className="flex-1 min-h-0 p-3">
+        <div className="flex-1 min-h-0 p-4">
           <TableView
             reloadKey={libVersion}
             currentTrackId={current?.id ?? null}
@@ -806,12 +806,12 @@ export default function App() {
           />
         </div>
       ) : view === "current" ? (
-        <div className="flex-1 min-h-0 p-3">
+        <div className="flex-1 min-h-0 p-4">
           <CurrentView active={view === "current"} />
         </div>
       ) : (
       <div
-        className="flex-1 min-h-0 grid gap-3 p-3"
+        className="flex-1 min-h-0 grid gap-4 p-4"
         style={{ gridTemplateColumns: mainCols }}
       >
         {/* Collection (with sort + filter) */}
