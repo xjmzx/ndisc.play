@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Version=1.0
-Name=ndisc.play
+Name=nplay
 GenericName=Music Player
 Comment=Browse and play a local music collection (ndisc suite)
 Exec=@BINDIR@/nplay
