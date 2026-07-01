@@ -29,7 +29,7 @@ import { CurrentView } from "./components/CurrentView";
 import { LibraryTree, type SortKey } from "./components/LibraryTree";
 import { NowPlaying } from "./components/NowPlaying";
 import { PlayerBar } from "./components/PlayerBar";
-import { Playlist } from "./components/Playlist";
+import { Playlist, type PlaylistSortKey } from "./components/Playlist";
 import { ScanProgressBar } from "./components/ScanProgressBar";
 import { Spectrum } from "./components/Spectrum";
 import { TableView } from "./components/TableView";
@@ -363,11 +363,21 @@ export default function App() {
     setIndex((idx) => (i < idx ? idx - 1 : idx));
   }, []);
   const clearPlaylist = useCallback(() => {
+    // Don't interrupt playback: if a track is playing, keep it as the sole
+    // remaining entry (its `id` is unchanged, so the [current?.id] playback
+    // effect doesn't re-fire). Only fully empty + stop when nothing plays.
+    const cur = index >= 0 && index < playlist.length ? playlist[index] : null;
+    if (cur) {
+      setPlaylist([cur]);
+      setIndex(0);
+      if (shuffle) setOrder(makeShuffleOrder(1, 0));
+      return;
+    }
     setPlaylist([]);
     setIndex(-1);
     audioStop().catch(() => {});
     if (videoElRef.current) videoElRef.current.pause();
-  }, []);
+  }, [playlist, index, shuffle]);
 
   // Bulk-prune the playlist by a keep-predicate, re-pointing `index` at the
   // track that was playing (the shuffle `order` self-heals via the
@@ -394,6 +404,62 @@ export default function App() {
       return true;
     });
   }, [prunePlaylist]);
+
+  // Reorder the playlist (sort or drag-drop): keep the highlight on the track
+  // that's playing and, when shuffling, rebuild the shuffle order around its
+  // new slot (the [shuffle, playlist.length] effect only fires on resize, so a
+  // same-length reorder must regenerate `order` here).
+  const applyReorder = useCallback(
+    (next: Track[]) => {
+      const cur = index >= 0 && index < playlist.length ? playlist[index] : null;
+      setPlaylist(next);
+      const ni = cur ? next.indexOf(cur) : -1;
+      const nidx = ni >= 0 ? ni : index;
+      setIndex(nidx);
+      if (shuffle) setOrder(makeShuffleOrder(next.length, nidx));
+    },
+    [playlist, index, shuffle],
+  );
+  const reorderPlaylist = useCallback(
+    (from: number, to: number) => {
+      if (from === to) return;
+      const next = playlist.slice();
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
+      applyReorder(next);
+    },
+    [playlist, applyReorder],
+  );
+  const sortPlaylist = useCallback(
+    (key: PlaylistSortKey) => {
+      const meta = (t: Track) => albumById.get(t.albumId);
+      const byAlbumTrack = (a: Track, b: Track) =>
+        (a.discNo ?? 0) - (b.discNo ?? 0) ||
+        (a.trackNo ?? 0) - (b.trackNo ?? 0) ||
+        a.title.localeCompare(b.title);
+      const cmp = (a: Track, b: Track): number => {
+        switch (key) {
+          case "title":
+            return a.title.localeCompare(b.title);
+          case "duration":
+            return (a.duration ?? 0) - (b.duration ?? 0);
+          case "artist":
+            return (
+              (meta(a)?.artist ?? "").localeCompare(meta(b)?.artist ?? "") ||
+              (meta(a)?.album ?? "").localeCompare(meta(b)?.album ?? "") ||
+              byAlbumTrack(a, b)
+            );
+          case "album":
+            return (
+              (meta(a)?.album ?? "").localeCompare(meta(b)?.album ?? "") ||
+              byAlbumTrack(a, b)
+            );
+        }
+      };
+      applyReorder(playlist.slice().sort(cmp));
+    },
+    [playlist, albumById, applyReorder],
+  );
 
   // Auto-persist the working playlist by path, and restore it on launch
   // (resolving paths back to fresh library tracks). `hydrated` gates the
@@ -947,6 +1013,8 @@ export default function App() {
                 onSave={savePlaylistFile}
                 onRemoveUnavailable={removeUnavailableFromPlaylist}
                 onRemoveDuplicates={removeDuplicatesFromPlaylist}
+                onReorder={reorderPlaylist}
+                onSort={sortPlaylist}
               />
             </div>
           </Section>

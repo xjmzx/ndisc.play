@@ -1,9 +1,11 @@
-import { memo } from "react";
+import { memo, useState } from "react";
 import {
+  ArrowDownUp,
   Ban,
   CopyMinus,
   FolderOpen,
   FolderSearch,
+  GripVertical,
   Play,
   Save,
   Trash2,
@@ -12,6 +14,16 @@ import {
 import { cn } from "../lib/cn";
 import { formatTime } from "../lib/format";
 import { revealInFileManager, type Album, type Track } from "../lib/tauri";
+
+/** One-shot sort keys for the playlist (applied as a reorder, not a mode). */
+export type PlaylistSortKey = "title" | "artist" | "album" | "duration";
+
+const SORT_OPTIONS: [PlaylistSortKey, string][] = [
+  ["artist", "Artist"],
+  ["album", "Album"],
+  ["title", "Title"],
+  ["duration", "Duration"],
+];
 
 interface PlaylistProps {
   tracks: Track[];
@@ -29,6 +41,10 @@ interface PlaylistProps {
   onRemoveUnavailable: () => void;
   /** Collapse duplicate paths, keeping the first occurrence. */
   onRemoveDuplicates: () => void;
+  /** Move a track from one row to another (drag-drop reorder). */
+  onReorder: (from: number, to: number) => void;
+  /** Sort the whole list by a key (one-shot reorder). */
+  onSort: (key: PlaylistSortKey) => void;
 }
 
 // Memoized so the app's 250ms position tick doesn't reconcile the list (its
@@ -46,12 +62,17 @@ function PlaylistImpl({
   onSave,
   onRemoveUnavailable,
   onRemoveDuplicates,
+  onReorder,
+  onSort,
 }: PlaylistProps) {
   const hasUnavailable = tracks.some((t) => t.playable === false);
   const seenPaths = new Set<string>();
   const hasDuplicates = tracks.some((t) =>
     seenPaths.has(t.path) ? true : (seenPaths.add(t.path), false),
   );
+  const [sortOpen, setSortOpen] = useState(false);
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [overIndex, setOverIndex] = useState<number | null>(null);
   return (
     <div className="flex flex-col gap-1">
       {/* Sticky toolbar */}
@@ -64,10 +85,48 @@ function PlaylistImpl({
         >
           <Play size={13} /> Play
         </button>
+        <div className="relative ml-auto">
+          <button
+            onClick={() => setSortOpen((o) => !o)}
+            disabled={!tracks.length}
+            title="Sort playlist"
+            aria-haspopup="menu"
+            aria-expanded={sortOpen}
+            className="text-muted hover:text-accent disabled:opacity-40 transition-colors"
+          >
+            <ArrowDownUp size={14} />
+          </button>
+          {sortOpen && (
+            <>
+              <div
+                className="fixed inset-0 z-10"
+                onClick={() => setSortOpen(false)}
+              />
+              <div
+                role="menu"
+                className="absolute right-0 top-full mt-1 z-20 flex flex-col rounded-md border border-surface bg-panel py-1 text-[12px] shadow-lg"
+              >
+                {SORT_OPTIONS.map(([key, label]) => (
+                  <button
+                    key={key}
+                    role="menuitem"
+                    onClick={() => {
+                      onSort(key);
+                      setSortOpen(false);
+                    }}
+                    className="px-3 py-1 text-left whitespace-nowrap text-fg/80 hover:bg-surface/60 hover:text-accent transition-colors"
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
         <button
           onClick={onLoad}
           title="Load an .xspf playlist"
-          className="ml-auto text-muted hover:text-accent transition-colors"
+          className="text-muted hover:text-accent transition-colors"
         >
           <FolderOpen size={14} />
         </button>
@@ -122,9 +181,35 @@ function PlaylistImpl({
             return (
               <div
                 key={`${t.id}-${i}`}
+                draggable
+                onDragStart={(e) => {
+                  setDragIndex(i);
+                  e.dataTransfer.effectAllowed = "move";
+                }}
+                onDragOver={(e) => {
+                  if (dragIndex === null) return;
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = "move";
+                  if (overIndex !== i) setOverIndex(i);
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  if (dragIndex !== null) onReorder(dragIndex, i);
+                  setDragIndex(null);
+                  setOverIndex(null);
+                }}
+                onDragEnd={() => {
+                  setDragIndex(null);
+                  setOverIndex(null);
+                }}
                 className={cn(
                   "group flex items-center gap-2 px-2 py-1 rounded hover:bg-surface/50 text-[13px]",
                   active && "bg-surface/70",
+                  dragIndex === i && "opacity-40",
+                  overIndex === i &&
+                    dragIndex !== null &&
+                    dragIndex !== i &&
+                    "ring-1 ring-inset ring-accent/60 bg-accent/10",
                 )}
                 title={
                   unplayable
@@ -132,6 +217,11 @@ function PlaylistImpl({
                     : undefined
                 }
               >
+                <GripVertical
+                  size={13}
+                  className="shrink-0 text-muted/40 opacity-0 group-hover:opacity-100 cursor-grab transition-opacity"
+                  aria-hidden="true"
+                />
                 <div
                   onDoubleClick={() => onPlayAt(i)}
                   title="Double-click to play"
