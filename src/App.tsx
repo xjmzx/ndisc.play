@@ -633,9 +633,10 @@ export default function App() {
     );
 
   // Collapse-flanks: each column is its content width or a 2.5rem sliver.
-  // Collection is the greedy fr so collapsing a neighbour widens it.
+  // Collection + Playlist share the same 1fr default so they're equal width;
+  // both grow equally when a neighbour collapses.
   const mainCols = [
-    colCollapsed ? "2.5rem" : "minmax(0, 1.5fr)",
+    colCollapsed ? "2.5rem" : "minmax(0, 1fr)",
     plCollapsed ? "2.5rem" : "minmax(0, 1fr)",
     npCollapsed ? "2.5rem" : "300px",
     vidCollapsed ? "2.5rem" : "minmax(0, 1fr)",
