@@ -369,6 +369,32 @@ export default function App() {
     if (videoElRef.current) videoElRef.current.pause();
   }, []);
 
+  // Bulk-prune the playlist by a keep-predicate, re-pointing `index` at the
+  // track that was playing (the shuffle `order` self-heals via the
+  // [shuffle, playlist.length] effect). Backs the toolbar cleanup actions.
+  const prunePlaylist = useCallback(
+    (keep: (t: Track) => boolean) => {
+      const cur = index >= 0 && index < playlist.length ? playlist[index] : null;
+      const kept = playlist.filter(keep);
+      setPlaylist(kept);
+      const ni = cur ? kept.indexOf(cur) : -1;
+      setIndex(ni >= 0 ? ni : Math.min(index, kept.length - 1));
+    },
+    [playlist, index],
+  );
+  const removeUnavailableFromPlaylist = useCallback(
+    () => prunePlaylist((t) => t.playable !== false),
+    [prunePlaylist],
+  );
+  const removeDuplicatesFromPlaylist = useCallback(() => {
+    const seen = new Set<string>();
+    prunePlaylist((t) => {
+      if (seen.has(t.path)) return false;
+      seen.add(t.path);
+      return true;
+    });
+  }, [prunePlaylist]);
+
   // Auto-persist the working playlist by path, and restore it on launch
   // (resolving paths back to fresh library tracks). `hydrated` gates the
   // save effect so the initial empty render doesn't clobber saved data.
@@ -919,6 +945,8 @@ export default function App() {
                 onClear={clearPlaylist}
                 onLoad={loadPlaylistFile}
                 onSave={savePlaylistFile}
+                onRemoveUnavailable={removeUnavailableFromPlaylist}
+                onRemoveDuplicates={removeDuplicatesFromPlaylist}
               />
             </div>
           </Section>

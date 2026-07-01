@@ -1,8 +1,17 @@
 import { memo } from "react";
-import { FolderOpen, Play, Save, Trash2, X } from "lucide-react";
+import {
+  Ban,
+  CopyMinus,
+  FolderOpen,
+  FolderSearch,
+  Play,
+  Save,
+  Trash2,
+  X,
+} from "lucide-react";
 import { cn } from "../lib/cn";
 import { formatTime } from "../lib/format";
-import type { Album, Track } from "../lib/tauri";
+import { revealInFileManager, type Album, type Track } from "../lib/tauri";
 
 interface PlaylistProps {
   tracks: Track[];
@@ -16,6 +25,10 @@ interface PlaylistProps {
   onLoad: () => void;
   /** Export the playlist as an .xspf. */
   onSave: () => void;
+  /** Drop tracks whose format can't be decoded. */
+  onRemoveUnavailable: () => void;
+  /** Collapse duplicate paths, keeping the first occurrence. */
+  onRemoveDuplicates: () => void;
 }
 
 // Memoized so the app's 250ms position tick doesn't reconcile the list (its
@@ -31,7 +44,14 @@ function PlaylistImpl({
   onClear,
   onLoad,
   onSave,
+  onRemoveUnavailable,
+  onRemoveDuplicates,
 }: PlaylistProps) {
+  const hasUnavailable = tracks.some((t) => t.playable === false);
+  const seenPaths = new Set<string>();
+  const hasDuplicates = tracks.some((t) =>
+    seenPaths.has(t.path) ? true : (seenPaths.add(t.path), false),
+  );
   return (
     <div className="flex flex-col gap-1">
       {/* Sticky toolbar */}
@@ -58,6 +78,22 @@ function PlaylistImpl({
           className="text-muted hover:text-accent disabled:opacity-40 transition-colors"
         >
           <Save size={14} />
+        </button>
+        <button
+          onClick={onRemoveUnavailable}
+          disabled={!hasUnavailable}
+          title="Remove unavailable tracks"
+          className="text-muted hover:text-alert disabled:opacity-40 transition-colors"
+        >
+          <Ban size={14} />
+        </button>
+        <button
+          onClick={onRemoveDuplicates}
+          disabled={!hasDuplicates}
+          title="Remove duplicate tracks"
+          className="text-muted hover:text-alert disabled:opacity-40 transition-colors"
+        >
+          <CopyMinus size={14} />
         </button>
         <span className="text-[11px] text-muted tabular-nums">
           {tracks.length}
@@ -129,6 +165,13 @@ function PlaylistImpl({
                     {formatTime(t.duration)}
                   </span>
                 )}
+                <button
+                  onClick={() => revealInFileManager(t.path).catch(() => {})}
+                  title="Show in file browser"
+                  className="opacity-0 group-hover:opacity-100 text-muted hover:text-accent shrink-0 transition-opacity"
+                >
+                  <FolderSearch size={13} />
+                </button>
                 <button
                   onClick={() => onRemove(i)}
                   title="Remove"

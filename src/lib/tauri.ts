@@ -3,6 +3,7 @@
 
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 
 export interface Album {
   id: number;
@@ -113,6 +114,11 @@ export function writeTextFile(path: string, contents: string): Promise<void> {
 
 export function defaultPlaylistDir(): Promise<string> {
   return invoke("default_playlist_dir");
+}
+
+/** Open the OS file manager with the given file selected. */
+export function revealInFileManager(path: string): Promise<void> {
+  return revealItemInDir(path);
 }
 
 export function onScanProgress(
