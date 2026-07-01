@@ -1,3 +1,4 @@
+import { useRef, useState } from "react";
 import { Volume2 } from "lucide-react";
 import { cn } from "../lib/cn";
 import { formatTime } from "../lib/format";
@@ -24,14 +25,43 @@ export function PlayerBar({
   onSeek,
   onVolume,
 }: PlayerBarProps) {
-  function seek(e: React.MouseEvent<HTMLDivElement>) {
-    if (!duration || !isFinite(duration)) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    onSeek(pct * duration);
+  // Drag-scrub the progress bar. While dragging we track the scrubbed time
+  // locally (so the fill/thumb follow the pointer live) and only commit the
+  // real seek on release — avoids hammering the decoder with a seek per
+  // pointer-move. A plain click is a down+up in place, so it still seeks.
+  const barRef = useRef<HTMLDivElement>(null);
+  const [scrub, setScrub] = useState<number | null>(null);
+  const seekable = !!track && duration > 0 && isFinite(duration);
+
+  function timeFromClientX(clientX: number): number {
+    const el = barRef.current;
+    if (!el) return 0;
+    const rect = el.getBoundingClientRect();
+    const frac = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    return frac * duration;
+  }
+  function onPointerDown(e: React.PointerEvent<HTMLDivElement>) {
+    if (!seekable) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    setScrub(timeFromClientX(e.clientX));
+  }
+  function onPointerMove(e: React.PointerEvent<HTMLDivElement>) {
+    if (scrub === null) return;
+    setScrub(timeFromClientX(e.clientX));
+  }
+  function onPointerUp(e: React.PointerEvent<HTMLDivElement>) {
+    if (scrub === null) return;
+    onSeek(scrub);
+    setScrub(null);
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      /* pointer already released */
+    }
   }
 
-  const pct = duration > 0 ? (currentTime / duration) * 100 : 0;
+  const shown = scrub ?? currentTime;
+  const pct = duration > 0 ? (shown / duration) * 100 : 0;
 
   return (
     <div className="flex justify-center px-4 py-2.5 bg-panel border-t border-surface/60">
@@ -47,17 +77,34 @@ export function PlayerBar({
         {/* Elapsed · seek · total · volume */}
         <div className="w-full flex items-center gap-2">
           <span className="text-[11px] text-muted font-mono tabular-nums w-9 text-right shrink-0">
-            {formatTime(currentTime)}
+            {formatTime(shown)}
           </span>
           <div
-            onClick={seek}
+            ref={barRef}
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={onPointerUp}
             className={cn(
-              "flex-1 h-1.5 rounded-full bg-surface/60 overflow-hidden relative min-w-0",
-              track ? "cursor-pointer" : "cursor-default",
+              "group/seek flex-1 h-1.5 rounded-full bg-surface/60 relative min-w-0 touch-none",
+              seekable ? "cursor-pointer" : "cursor-default",
             )}
-            title="Click to seek"
+            title="Click or drag to seek"
           >
-            <div className="h-full bg-accent" style={{ width: `${pct}%` }} />
+            <div
+              className="h-full rounded-full bg-accent"
+              style={{ width: `${pct}%` }}
+            />
+            {seekable && (
+              <div
+                className={cn(
+                  "absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-accent shadow transition-opacity",
+                  scrub !== null
+                    ? "opacity-100"
+                    : "opacity-0 group-hover/seek:opacity-100",
+                )}
+                style={{ left: `${pct}%` }}
+              />
+            )}
           </div>
           <span className="text-[11px] text-muted font-mono tabular-nums w-9 shrink-0">
             {formatTime(duration)}

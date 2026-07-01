@@ -956,6 +956,13 @@ fn default_playlist_dir(app: AppHandle) -> Result<String, String> {
     Ok(dir.to_string_lossy().into_owned())
 }
 
+/// Absolute path of the SQLite library the app is using (dev/installed split).
+/// Surfaced in the footer, matching the sibling apps' db-path readout.
+#[tauri::command]
+fn library_db_path(app: AppHandle) -> Result<String, String> {
+    Ok(db_path(&app)?.to_string_lossy().into_owned())
+}
+
 // ---- native audio playback (rodio) ---------------------------------------
 //
 // WebKit2GTK's media element here refuses to play from any app URI scheme
@@ -1626,6 +1633,7 @@ pub fn run() {
             read_text_file,
             write_text_file,
             default_playlist_dir,
+            library_db_path,
             audio_play,
             audio_pause,
             audio_resume,

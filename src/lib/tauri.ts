@@ -116,6 +116,11 @@ export function defaultPlaylistDir(): Promise<string> {
   return invoke("default_playlist_dir");
 }
 
+/** Absolute path of the SQLite library in use (shown in the footer). */
+export function libraryDbPath(): Promise<string> {
+  return invoke("library_db_path");
+}
+
 /** Open the OS file manager with the given file selected. */
 export function revealInFileManager(path: string): Promise<void> {
   return revealItemInDir(path);

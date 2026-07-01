@@ -44,6 +44,7 @@ import {
   audioStop,
   defaultPlaylistDir,
   getConfig,
+  libraryDbPath,
   libraryStats,
   listAlbums,
   mediaBase,
@@ -167,6 +168,7 @@ export default function App() {
   // while shuffle is on. Regenerated when shuffle turns on or the list resizes.
   const [order, setOrder] = useState<number[]>([]);
   const [playlistDir, setPlaylistDir] = useState<string | null>(null);
+  const [dbPath, setDbPath] = useState<string | null>(null);
   const [sort, setSort] = useState<SortKey>("artist");
   const [filter, setFilter] = useState("");
   const [videoOnly, setVideoOnly] = useState(false);
@@ -219,6 +221,7 @@ export default function App() {
       .then(setAppVersion)
       .catch(() => setAppVersion(null));
     mediaBase().then(setMediaBaseUrl).catch(() => {});
+    libraryDbPath().then(setDbPath).catch(() => {});
     refreshAlbums();
     const un = onScanProgress(setProgress);
     return () => {
@@ -1079,7 +1082,7 @@ export default function App() {
       </div>
       )}
 
-      {/* Footer — now playing, seek, volume (transport is in the header) */}
+      {/* Now playing, seek, volume (transport is in the header) */}
       <PlayerBar
         track={current}
         album={currentAlbum}
@@ -1089,6 +1092,28 @@ export default function App() {
         onSeek={seek}
         onVolume={changeVolume}
       />
+
+      {/* Thin status footer — matches the ndisc suite: stack left, an
+          nsec/identity chip in the centre (parked until nplay goes
+          nostr-aware — see the roadmap note), db location on the right. */}
+      <footer className="shrink-0 grid grid-cols-3 items-center gap-4 px-4 py-1 text-[11px] text-muted border-t border-surface/60 bg-panel/60">
+        <span className="truncate">
+          stack: Tauri 2 + React + TS + Tailwind + SQLite
+        </span>
+        {/* centre slot reserved for the eventual nsec-in-keychain chip */}
+        <span className="justify-self-center min-w-0" />
+        {dbPath && (
+          <span className="inline-flex items-center gap-1.5 justify-self-end min-w-0">
+            <span className="shrink-0">db</span>
+            <span
+              className="font-mono text-mauve truncate max-w-[32rem]"
+              title={dbPath}
+            >
+              {dbPath}
+            </span>
+          </span>
+        )}
+      </footer>
     </div>
   );
 }
